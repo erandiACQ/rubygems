@@ -9,7 +9,7 @@ require 'rbconfig'
 require 'thread'
 
 module Gem
-  VERSION = '2.4.8'
+  VERSION = '2.4.8.1.acquia'
 end
 
 # Must be first since it unloads the prelude from 1.9.2
