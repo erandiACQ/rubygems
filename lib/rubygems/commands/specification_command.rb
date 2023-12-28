@@ -1,38 +1,39 @@
-require 'rubygems/command'
-require 'rubygems/local_remote_options'
-require 'rubygems/version_option'
-require 'rubygems/package'
+# frozen_string_literal: true
+
+require_relative "../command"
+require_relative "../local_remote_options"
+require_relative "../version_option"
+require_relative "../package"
 
 class Gem::Commands::SpecificationCommand < Gem::Command
-
   include Gem::LocalRemoteOptions
   include Gem::VersionOption
 
   def initialize
     Gem.load_yaml
 
-    super 'specification', 'Display gem specification (in yaml)',
-          :domain => :local, :version => Gem::Requirement.default,
-          :format => :yaml
+    super "specification", "Display gem specification (in yaml)",
+          domain: :local, version: Gem::Requirement.default,
+          format: :yaml
 
-    add_version_option('examine')
+    add_version_option("examine")
     add_platform_option
     add_prerelease_option
 
-    add_option('--all', 'Output specifications for all versions of',
-               'the gem') do |value, options|
+    add_option("--all", "Output specifications for all versions of",
+               "the gem") do |_value, options|
       options[:all] = true
     end
 
-    add_option('--ruby', 'Output ruby format') do |value, options|
+    add_option("--ruby", "Output ruby format") do |_value, options|
       options[:format] = :ruby
     end
 
-    add_option('--yaml', 'Output YAML format') do |value, options|
+    add_option("--yaml", "Output YAML format") do |_value, options|
       options[:format] = :yaml
     end
 
-    add_option('--marshal', 'Output Marshal format') do |value, options|
+    add_option("--marshal", "Output Marshal format") do |_value, options|
       options[:format] = :marshal
     end
 
@@ -74,7 +75,7 @@ Specific fields in the specification can be extracted in YAML format:
     specs = []
     gem = options[:args].shift
 
-    unless gem then
+    unless gem
       raise Gem::CommandLineError,
             "Please specify a gem name or file on the command line"
     end
@@ -88,7 +89,7 @@ Specific fields in the specification can be extracted in YAML format:
       raise Gem::CommandLineError, "Unsupported version type: '#{v}'"
     end
 
-    if !req.none? and options[:all]
+    if !req.none? && options[:all]
       alert_error "Specify --all or -v, not both"
       terminate_interaction 1
     end
@@ -102,32 +103,42 @@ Specific fields in the specification can be extracted in YAML format:
     field = get_one_optional_argument
 
     raise Gem::CommandLineError, "--ruby and FIELD are mutually exclusive" if
-      field and options[:format] == :ruby
+      field && options[:format] == :ruby
 
-    if local? then
-      if File.exist? gem then
-        specs << Gem::Package.new(gem).spec rescue nil
+    if local?
+      if File.exist? gem
+        begin
+          specs << Gem::Package.new(gem).spec
+        rescue StandardError
+          nil
+        end
       end
 
-      if specs.empty? then
+      if specs.empty?
         specs.push(*dep.matching_specs)
       end
     end
 
-    if remote? then
+    if remote?
       dep.prerelease = options[:prerelease]
       found, _ = Gem::SpecFetcher.fetcher.spec_for_dependency dep
 
-      specs.push(*found.map { |spec,| spec })
+      specs.push(*found.map {|spec,| spec })
     end
 
-    if specs.empty? then
+    if specs.empty?
       alert_error "No gem matching '#{dep}' found"
       terminate_interaction 1
     end
 
-    unless options[:all] then
-      specs = [specs.max_by { |s| s.version }]
+    platform = get_platform_from_requirements(options)
+
+    if platform
+      specs = specs.select {|s| s.platform.to_s == platform }
+    end
+
+    unless options[:all]
+      specs = [specs.max_by(&:version)]
     end
 
     specs.each do |s|
@@ -137,7 +148,7 @@ Specific fields in the specification can be extracted in YAML format:
           when :ruby then s.to_ruby
           when :marshal then Marshal.dump s
           else s.to_yaml
-          end
+      end
 
       say "\n"
     end

@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 ##
 # Parses a gem.deps.rb.lock file and constructs a LockSet containing the
 # dependencies found inside.  If the lock file is missing no LockSet is
@@ -8,7 +10,6 @@ class Gem::RequestSet::Lockfile
   # Raised when a lockfile cannot be parsed
 
   class ParseError < Gem::Exception
-
     ##
     # The column where the error was encountered
 
@@ -28,7 +29,7 @@ class Gem::RequestSet::Lockfile
     # Raises a ParseError with the given +message+ which was encountered at a
     # +line+ and +column+ while parsing.
 
-    def initialize message, column, line, path
+    def initialize(message, column, line, path)
       @line   = line
       @column = column
       @path   = path
@@ -40,13 +41,13 @@ class Gem::RequestSet::Lockfile
   # Creates a new Lockfile for the given +request_set+ and +gem_deps_file+
   # location.
 
-  def self.build request_set, gem_deps_file, dependencies = nil
+  def self.build(request_set, gem_deps_file, dependencies = nil)
     request_set.resolve
     dependencies ||= requests_to_deps request_set.sorted_requests
     new request_set, gem_deps_file, dependencies
   end
 
-  def self.requests_to_deps requests # :nodoc:
+  def self.requests_to_deps(requests) # :nodoc:
     deps = {}
 
     requests.each do |request|
@@ -55,11 +56,11 @@ class Gem::RequestSet::Lockfile
       requirement = request.request.dependency.requirement
 
       deps[name] = if [Gem::Resolver::VendorSpecification,
-                       Gem::Resolver::GitSpecification].include? spec.class then
-                     Gem::Requirement.source_set
-                   else
-                     requirement
-                   end
+                       Gem::Resolver::GitSpecification].include? spec.class
+        Gem::Requirement.source_set
+      else
+        requirement
+      end
     end
 
     deps
@@ -70,43 +71,40 @@ class Gem::RequestSet::Lockfile
 
   attr_reader :platforms
 
-  def initialize request_set, gem_deps_file, dependencies
+  def initialize(request_set, gem_deps_file, dependencies)
     @set           = request_set
     @dependencies  = dependencies
     @gem_deps_file = File.expand_path(gem_deps_file)
     @gem_deps_dir  = File.dirname(@gem_deps_file)
-
-    @gem_deps_file.untaint unless gem_deps_file.tainted?
-
-    @platforms      = []
+    @platforms = []
   end
 
-  def add_DEPENDENCIES out # :nodoc:
+  def add_DEPENDENCIES(out) # :nodoc:
     out << "DEPENDENCIES"
 
-    out.concat @dependencies.sort_by { |name,| name }.map { |name, requirement|
+    out.concat @dependencies.sort.map {|name, requirement|
       "  #{name}#{requirement.for_lockfile}"
     }
 
     out << nil
   end
 
-  def add_GEM out, spec_groups # :nodoc:
+  def add_GEM(out, spec_groups) # :nodoc:
     return if spec_groups.empty?
 
     source_groups = spec_groups.values.flatten.group_by do |request|
       request.spec.source.uri
     end
 
-    source_groups.sort_by { |group,| group.to_s }.map do |group, requests|
+    source_groups.sort_by {|group,| group.to_s }.map do |group, requests|
       out << "GEM"
       out << "  remote: #{group}"
       out << "  specs:"
 
-      requests.sort_by { |request| request.name }.each do |request|
-        next if request.spec.name == 'bundler'
+      requests.sort_by(&:name).each do |request|
+        next if request.spec.name == "bundler"
         platform = "-#{request.spec.platform}" unless
-          Gem::Platform::RUBY == request.spec.platform
+          request.spec.platform == Gem::Platform::RUBY
 
         out << "    #{request.name} (#{request.version}#{platform})"
 
@@ -121,7 +119,7 @@ class Gem::RequestSet::Lockfile
     end
   end
 
-  def add_GIT out, git_requests
+  def add_GIT(out, git_requests)
     return if git_requests.empty?
 
     by_repository_revision = git_requests.group_by do |request|
@@ -129,33 +127,32 @@ class Gem::RequestSet::Lockfile
       [source.repository, source.rev_parse]
     end
 
-    out << "GIT"
     by_repository_revision.each do |(repository, revision), requests|
+      out << "GIT"
       out << "  remote: #{repository}"
       out << "  revision: #{revision}"
       out << "  specs:"
 
-      requests.sort_by { |request| request.name }.each do |request|
+      requests.sort_by(&:name).each do |request|
         out << "    #{request.name} (#{request.version})"
 
-        dependencies = request.spec.dependencies.sort_by { |dep| dep.name }
+        dependencies = request.spec.dependencies.sort_by(&:name)
         dependencies.each do |dep|
           out << "      #{dep.name}#{dep.requirement.for_lockfile}"
         end
       end
+      out << nil
     end
-
-    out << nil
   end
 
-  def relative_path_from dest, base # :nodoc:
+  def relative_path_from(dest, base) # :nodoc:
     dest = File.expand_path(dest)
     base = File.expand_path(base)
 
-    if dest.index(base) == 0 then
-      offset = dest[base.size+1..-1]
+    if dest.index(base) == 0
+      offset = dest[base.size + 1..-1]
 
-      return '.' unless offset
+      return "." unless offset
 
       offset
     else
@@ -163,7 +160,7 @@ class Gem::RequestSet::Lockfile
     end
   end
 
-  def add_PATH out, path_requests # :nodoc:
+  def add_PATH(out, path_requests) # :nodoc:
     return if path_requests.empty?
 
     out << "PATH"
@@ -178,14 +175,14 @@ class Gem::RequestSet::Lockfile
     out << nil
   end
 
-  def add_PLATFORMS out # :nodoc:
+  def add_PLATFORMS(out) # :nodoc:
     out << "PLATFORMS"
 
-    platforms = requests.map { |request| request.spec.platform }.uniq
+    platforms = requests.map {|request| request.spec.platform }.uniq
 
-    platforms = platforms.sort_by { |platform| platform.to_s }
+    platforms = platforms.sort_by(&:to_s)
 
-    platforms.sort.each do |platform|
+    platforms.each do |platform|
       out << "  #{platform}"
     end
 
@@ -193,7 +190,7 @@ class Gem::RequestSet::Lockfile
   end
 
   def spec_groups
-    requests.group_by { |request| request.spec.class }
+    requests.group_by {|request| request.spec.class }
   end
 
   ##
@@ -223,7 +220,7 @@ class Gem::RequestSet::Lockfile
   def write
     content = to_s
 
-    open "#{@gem_deps_file}.lock", 'w' do |io|
+    File.open "#{@gem_deps_file}.lock", "w" do |io|
       io.write content
     end
   end
@@ -235,4 +232,4 @@ class Gem::RequestSet::Lockfile
   end
 end
 
-require 'rubygems/request_set/lockfile/tokenizer'
+require_relative "lockfile/tokenizer"

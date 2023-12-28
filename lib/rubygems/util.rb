@@ -1,20 +1,27 @@
+# frozen_string_literal: true
+
+require_relative "deprecate"
+
 ##
 # This module contains various utility methods as module methods.
 
 module Gem::Util
-
-  @silent_mutex = nil
-
   ##
   # Zlib::GzipReader wrapper that unzips +data+.
 
   def self.gunzip(data)
-    require 'zlib'
-    require 'rubygems/util/stringio'
-    data = Gem::StringSource.new data
+    require "zlib"
+    require "stringio"
+    data = StringIO.new(data, "r")
 
-    unzipped = Zlib::GzipReader.new(data).read
-    unzipped.force_encoding Encoding::BINARY if Object.const_defined? :Encoding
+    gzip_reader = begin
+                    Zlib::GzipReader.new(data)
+                  rescue Zlib::GzipFile::Error => e
+                    raise e.class, e.inspect, e.backtrace
+                  end
+
+    unzipped = gzip_reader.read
+    unzipped.force_encoding Encoding::BINARY
     unzipped
   end
 
@@ -22,12 +29,14 @@ module Gem::Util
   # Zlib::GzipWriter wrapper that zips +data+.
 
   def self.gzip(data)
-    require 'zlib'
-    require 'rubygems/util/stringio'
-    zipped = Gem::StringSink.new
-    zipped.set_encoding Encoding::BINARY if Object.const_defined? :Encoding
+    require "zlib"
+    require "stringio"
+    zipped = StringIO.new(String.new, "w")
+    zipped.set_encoding Encoding::BINARY
 
-    Zlib::GzipWriter.wrap zipped do |io| io.write data end
+    Zlib::GzipWriter.wrap zipped do |io|
+      io.write data
+    end
 
     zipped.string
   end
@@ -36,99 +45,74 @@ module Gem::Util
   # A Zlib::Inflate#inflate wrapper
 
   def self.inflate(data)
-    require 'zlib'
+    require "zlib"
     Zlib::Inflate.inflate data
   end
 
   ##
-  # This calls IO.popen where it accepts an array for a +command+ (Ruby 1.9+)
-  # and implements an IO.popen-like behavior where it does not accept an array
-  # for a command.
+  # This calls IO.popen and reads the result
 
-  def self.popen *command
+  def self.popen(*command)
     IO.popen command, &:read
-  rescue TypeError # ruby 1.8 only supports string command
-    r, w = IO.pipe
-
-    pid = fork do
-      STDIN.close
-      STDOUT.reopen w
-
-      exec(*command)
-    end
-
-    w.close
-
-    begin
-      return r.read
-    ensure
-      Process.wait pid
-    end
   end
-
-  NULL_DEVICE = defined?(IO::NULL) ? IO::NULL : Gem.win_platform? ? 'NUL' : '/dev/null'
 
   ##
   # Invokes system, but silences all output.
 
-  def self.silent_system *command
-    opt = {:out => NULL_DEVICE, :err => [:child, :out]}
+  def self.silent_system(*command)
+    opt = { out: IO::NULL, err: [:child, :out] }
     if Hash === command.last
       opt.update(command.last)
       cmds = command[0...-1]
     else
       cmds = command.dup
     end
-    return system(*(cmds << opt))
-  rescue TypeError
-    require 'thread'
+    system(*(cmds << opt))
+  end
 
-    @silent_mutex ||= Mutex.new
+  class << self
+    extend Gem::Deprecate
 
-    null_device = NULL_DEVICE
-
-    @silent_mutex.synchronize do
-      begin
-        stdout = STDOUT.dup
-        stderr = STDERR.dup
-
-        STDOUT.reopen null_device, 'w'
-        STDERR.reopen null_device, 'w'
-
-        return system(*command)
-      ensure
-        STDOUT.reopen stdout
-        STDERR.reopen stderr
-        stdout.close
-        stderr.close
-      end
-    end
+    rubygems_deprecate :silent_system
   end
 
   ##
   # Enumerates the parents of +directory+.
 
-  def self.traverse_parents directory
+  def self.traverse_parents(directory, &block)
     return enum_for __method__, directory unless block_given?
 
     here = File.expand_path directory
-    start = here
-
-    Dir.chdir start
-
-    begin
-      loop do
-        yield here
-
-        Dir.chdir '..'
-
-        return if Dir.pwd == here # toplevel
-
-        here = Dir.pwd
+    loop do
+      begin
+        Dir.chdir here, &block
+      rescue StandardError
+        Errno::EACCES
       end
-    ensure
-      Dir.chdir start
+
+      new_here = File.expand_path("..", here)
+      return if new_here == here # toplevel
+      here = new_here
     end
   end
 
+  ##
+  # Globs for files matching +pattern+ inside of +directory+,
+  # returning absolute paths to the matching files.
+
+  def self.glob_files_in_dir(glob, base_path)
+    Dir.glob(glob, base: base_path).map! {|f| File.expand_path(f, base_path) }
+  end
+
+  ##
+  # Corrects +path+ (usually returned by `URI.parse().path` on Windows), that
+  # comes with a leading slash.
+
+  def self.correct_for_windows_path(path)
+    if path[0].chr == "/" && path[1].chr.match?(/[a-z]/i) && path[2].chr == ":"
+      path[1..-1]
+    else
+      path
+    end
+  end
 end

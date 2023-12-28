@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 ##
 # A VendorSet represents gems that have been unpacked into a specific
 # directory that contains a gemspec.
@@ -14,7 +16,6 @@
 # rake.gemspec (watching the given name).
 
 class Gem::Resolver::VendorSet < Gem::Resolver::Set
-
   ##
   # The specifications for this set.
 
@@ -31,7 +32,7 @@ class Gem::Resolver::VendorSet < Gem::Resolver::Set
   # Adds a specification to the set with the given +name+ which has been
   # unpacked into the given +directory+.
 
-  def add_vendor_gem name, directory # :nodoc:
+  def add_vendor_gem(name, directory) # :nodoc:
     gemspec = File.join directory, "#{name}.gemspec"
 
     spec = Gem::Specification.load gemspec
@@ -51,7 +52,7 @@ class Gem::Resolver::VendorSet < Gem::Resolver::Set
   # Returns an Array of VendorSpecification objects matching the
   # DependencyRequest +req+.
 
-  def find_all req
+  def find_all(req)
     @specs.values.select do |spec|
       req.match? spec
     end.map do |spec|
@@ -64,12 +65,12 @@ class Gem::Resolver::VendorSet < Gem::Resolver::Set
   # Loads a spec with the given +name+. +version+, +platform+ and +source+ are
   # ignored.
 
-  def load_spec name, version, platform, source # :nodoc:
+  def load_spec(name, version, platform, source) # :nodoc:
     @specs.fetch name
   end
 
-  def pretty_print q # :nodoc:
-    q.group 2, '[VendorSet', ']' do
+  def pretty_print(q) # :nodoc:
+    q.group 2, "[VendorSet", "]" do
       next if @directories.empty?
       q.breakable
 
@@ -82,6 +83,4 @@ class Gem::Resolver::VendorSet < Gem::Resolver::Set
       end
     end
   end
-
 end
-

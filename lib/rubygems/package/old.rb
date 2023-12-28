@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 #--
 # Copyright 2006 by Chad Fowler, Rich Kilmer, Jim Weirich and others.
 # All rights reserved.
@@ -11,21 +13,20 @@
 # Please pretend this doesn't exist.
 
 class Gem::Package::Old < Gem::Package
-
   undef_method :spec=
 
   ##
   # Creates a new old-format package reader for +gem+.  Old-format packages
   # cannot be written.
 
-  def initialize gem
-    require 'fileutils'
-    require 'zlib'
+  def initialize(gem, security_policy)
+    require "fileutils"
+    require "zlib"
     Gem.load_yaml
 
     @contents        = nil
     @gem             = gem
-    @security_policy = nil
+    @security_policy = security_policy
     @spec            = nil
   end
 
@@ -41,14 +42,14 @@ class Gem::Package::Old < Gem::Package
       read_until_dashes io # spec
       header = file_list io
 
-      @contents = header.map { |file| file['path'] }
+      @contents = header.map {|file| file["path"] }
     end
   end
 
   ##
   # Extracts the files in this package into +destination_dir+
 
-  def extract_files destination_dir
+  def extract_files(destination_dir)
     verify
 
     errstr = "Error reading files from gem"
@@ -59,27 +60,27 @@ class Gem::Package::Old < Gem::Package
       raise Gem::Exception, errstr unless header
 
       header.each do |entry|
-        full_name = entry['path']
+        full_name = entry["path"]
 
         destination = install_location full_name, destination_dir
 
-        file_data = ''
+        file_data = String.new
 
         read_until_dashes io do |line|
           file_data << line
         end
 
-        file_data = file_data.strip.unpack("m")[0]
+        file_data = file_data.strip.unpack1("m")
         file_data = Zlib::Inflate.inflate file_data
 
         raise Gem::Package::FormatError, "#{full_name} in #{@gem} is corrupt" if
-          file_data.length != entry['size'].to_i
+          file_data.length != entry["size"].to_i
 
         FileUtils.rm_rf destination
 
-        FileUtils.mkdir_p File.dirname destination
+        FileUtils.mkdir_p File.dirname(destination), mode: dir_mode && 0o755
 
-        open destination, 'wb', entry['mode'] do |out|
+        File.open destination, "wb", file_mode(entry["mode"]) do |out|
           out.write file_data
         end
 
@@ -93,20 +94,20 @@ class Gem::Package::Old < Gem::Package
   ##
   # Reads the file list section from the old-format gem +io+
 
-  def file_list io # :nodoc:
-    header = ''
+  def file_list(io) # :nodoc:
+    header = String.new
 
     read_until_dashes io do |line|
       header << line
     end
 
-    YAML.load header
+    Gem::SafeYAML.safe_load header
   end
 
   ##
   # Reads lines until a "---" separator is found
 
-  def read_until_dashes io # :nodoc:
+  def read_until_dashes(io) # :nodoc:
     while (line = io.gets) && line.chomp.strip != "---" do
       yield line if block_given?
     end
@@ -115,15 +116,15 @@ class Gem::Package::Old < Gem::Package
   ##
   # Skips the Ruby self-install header in +io+.
 
-  def skip_ruby io # :nodoc:
+  def skip_ruby(io) # :nodoc:
     loop do
       line = io.gets
 
-      return if line.chomp == '__END__'
+      return if line.chomp == "__END__"
       break unless line
     end
 
-    raise Gem::Exception, "Failed to find end of ruby script while reading gem"
+    raise Gem::Exception, "Failed to find end of Ruby script while reading gem"
   end
 
   ##
@@ -134,7 +135,7 @@ class Gem::Package::Old < Gem::Package
 
     return @spec if @spec
 
-    yaml = ''
+    yaml = String.new
 
     @gem.with_read_io do |io|
       skip_ruby io
@@ -143,17 +144,9 @@ class Gem::Package::Old < Gem::Package
       end
     end
 
-    yaml_error = if RUBY_VERSION < '1.9' then
-                   YAML::ParseError
-                 elsif YAML.const_defined?(:ENGINE) && YAML::ENGINE.yamler == 'syck' then
-                   YAML::ParseError
-                 else
-                   YAML::SyntaxError
-                 end
-
     begin
       @spec = Gem::Specification.from_yaml yaml
-    rescue yaml_error
+    rescue Psych::SyntaxError
       raise Gem::Exception, "Failed to parse gem specification out of gem file"
     end
   rescue ArgumentError
@@ -168,11 +161,9 @@ class Gem::Package::Old < Gem::Package
     return true unless @security_policy
 
     raise Gem::Security::Exception,
-          'old format gems do not contain signatures and cannot be verified' if
+          "old format gems do not contain signatures and cannot be verified" if
       @security_policy.verify_data
 
     true
   end
-
 end
-

@@ -1,7 +1,16 @@
-module Gem
-  List = Struct.new(:value, :tail)
+# frozen_string_literal: true
 
-  class List
+module Gem
+  # The Gem::List class is currently unused and will be removed in the next major rubygems version
+  class List # :nodoc:
+    include Enumerable
+    attr_accessor :value, :tail
+
+    def initialize(value = nil, tail = nil)
+      @value = value
+      @tail = tail
+    end
+
     def each
       n = self
       while n
@@ -11,32 +20,14 @@ module Gem
     end
 
     def to_a
-      ary = []
-      n = self
-      while n
-        ary.unshift n.value
-        n = n.tail
-      end
-
-      ary
-    end
-
-    def find
-      n = self
-      while n
-        v = n.value
-        return v if yield(v)
-        n = n.tail
-      end
-
-      nil
+      super.reverse
     end
 
     def prepend(value)
       List.new value, self
     end
 
-    def pretty_print q # :nodoc:
+    def pretty_print(q) # :nodoc:
       q.pp to_a
     end
 
@@ -45,4 +36,5 @@ module Gem
       List.new value, list
     end
   end
+  deprecate_constant :List
 end

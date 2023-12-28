@@ -1,5 +1,8 @@
-require 'rubygems/source_list'
-require 'rubygems/test_case'
+# frozen_string_literal: true
+
+require "rubygems"
+require "rubygems/source_list"
+require_relative "helper"
 
 class TestGemSourceList < Gem::TestCase
   def setup
@@ -24,6 +27,12 @@ class TestGemSourceList < Gem::TestCase
 
   def test_append
     sl = Gem::SourceList.new
+    sl << @uri
+    sl << @uri
+
+    assert_equal sl.to_a.size, 1
+
+    sl.clear
     source = (sl << @uri)
 
     assert_kind_of Gem::Source, source
@@ -37,7 +46,7 @@ class TestGemSourceList < Gem::TestCase
   def test_clear
     sl = Gem::SourceList.new
 
-    sl << 'http://source.example'
+    sl << "http://source.example"
 
     sl.clear
 
@@ -68,7 +77,7 @@ class TestGemSourceList < Gem::TestCase
 
     assert_empty sl
 
-    sl << 'http://source.example'
+    sl << "http://source.example"
 
     refute_empty sl
   end
@@ -107,5 +116,4 @@ class TestGemSourceList < Gem::TestCase
     @sl.delete Gem::Source.new(@uri)
     assert_equal @sl.sources, []
   end
-
 end

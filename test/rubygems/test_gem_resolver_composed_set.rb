@@ -1,7 +1,8 @@
-require 'rubygems/test_case'
+# frozen_string_literal: true
+
+require_relative "helper"
 
 class TestGemResolverComposedSet < Gem::TestCase
-
   def test_errors
     index_set   = Gem::Resolver::IndexSet.new
     current_set = Gem::Resolver::CurrentSet.new
@@ -40,6 +41,4 @@ class TestGemResolverComposedSet < Gem::TestCase
     refute best_set.remote?
     refute current_set.remote?
   end
-
 end
-

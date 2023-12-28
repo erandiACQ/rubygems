@@ -1,7 +1,8 @@
-require 'rubygems/test_case'
+# frozen_string_literal: true
+
+require_relative "helper"
 
 class TestGemResolverRequirementList < Gem::TestCase
-
   def setup
     super
 
@@ -15,6 +16,4 @@ class TestGemResolverRequirementList < Gem::TestCase
 
     assert_equal [req], @list.each.to_a
   end
-
 end
-

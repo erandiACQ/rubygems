@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 ##
 # Supports reading and writing gems from/to a generic IO object.  This is
 # useful for other applications built on top of rubygems, such as
@@ -7,10 +9,9 @@
 # object to `Gem::Package.new`.
 
 class Gem::Package::IOSource < Gem::Package::Source # :nodoc: all
-
   attr_reader :io
 
-  def initialize io
+  def initialize(io)
     @io = io
   end
 
@@ -32,14 +33,16 @@ class Gem::Package::IOSource < Gem::Package::Source # :nodoc: all
 
   def with_read_io
     yield io
+  ensure
+    io.rewind
   end
 
   def with_write_io
     yield io
+  ensure
+    io.rewind
   end
 
   def path
   end
-
 end
-

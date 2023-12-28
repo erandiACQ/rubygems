@@ -1,3 +1,7 @@
+# frozen_string_literal: true
+
+require_relative "../shellwords"
+
 #--
 # Copyright 2006 by Chad Fowler, Rich Kilmer, Jim Weirich and others.
 # All rights reserved.
@@ -5,32 +9,26 @@
 #++
 
 class Gem::Ext::RakeBuilder < Gem::Ext::Builder
-
-  def self.build(extension, directory, dest_path, results, args=[], lib_dir=nil)
-    if File.basename(extension) =~ /mkrf_conf/i then
-      cmd = "#{Gem.ruby} #{File.basename extension}"
-      cmd << " #{args.join " "}" unless args.empty?
-      run cmd, results
+  def self.build(extension, dest_path, results, args=[], lib_dir=nil, extension_dir=Dir.pwd)
+    if /mkrf_conf/i.match?(File.basename(extension))
+      run([Gem.ruby, File.basename(extension), *args], results, class_name, extension_dir)
     end
 
-    # Deal with possible spaces in the path, e.g. C:/Program Files
-    dest_path = '"' + dest_path.to_s + '"' if dest_path.to_s.include?(' ')
+    rake = ENV["rake"]
 
-    rake = ENV['rake']
+    if rake
+      rake = Shellwords.split(rake)
+    else
+      begin
+        rake = ruby << "-rrubygems" << Gem.bin_path("rake", "rake")
+      rescue Gem::Exception
+        rake = [Gem.default_exec_format % "rake"]
+      end
+    end
 
-    rake ||= begin
-               "#{Gem.ruby} -rubygems #{Gem.bin_path('rake', 'rake')}"
-             rescue Gem::Exception
-             end
-
-    rake ||= Gem.default_exec_format % 'rake'
-
-    cmd = "#{rake} RUBYARCHDIR=#{dest_path} RUBYLIBDIR=#{dest_path}" # ENV is frozen
-
-    run cmd, results
+    rake_args = ["RUBYARCHDIR=#{dest_path}", "RUBYLIBDIR=#{dest_path}", *args]
+    run(rake + rake_args, results, class_name, extension_dir)
 
     results
   end
-
 end
-

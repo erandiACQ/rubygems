@@ -1,20 +1,17 @@
-# -*- coding: utf-8 -*-
-#--
+# frozen_string_literal: true
+
+# rubocop:disable Style/AsciiComments
+
 # Copyright (C) 2004 Mauricio Julio Fernández Pradier
 # See LICENSE.txt for additional licensing information.
-#++
+
+# rubocop:enable Style/AsciiComments
 
 ##
 # TarReader reads tar files and allows iteration over their items
 
 class Gem::Package::TarReader
-
   include Enumerable
-
-  ##
-  # Raised if the tar IO is not seekable
-
-  class UnexpectedEOF < StandardError; end
 
   ##
   # Creates a new TarReader on +io+ and yields it to the block, if given.
@@ -55,47 +52,30 @@ class Gem::Package::TarReader
     return enum_for __method__ unless block_given?
 
     until @io.eof? do
-      header = Gem::Package::TarHeader.from @io
-      return if header.empty?
-
-      entry = Gem::Package::TarReader::Entry.new header, @io
-      size = entry.header.size
-
-      yield entry
-
-      skip = (512 - (size % 512)) % 512
-      pending = size - entry.bytes_read
-
       begin
-        # avoid reading...
-        @io.seek pending, IO::SEEK_CUR
-        pending = 0
-      rescue Errno::EINVAL, NameError
-        while pending > 0 do
-          bytes_read = @io.read([pending, 4096].min).size
-          raise UnexpectedEOF if @io.eof?
-          pending -= bytes_read
-        end
+        header = Gem::Package::TarHeader.from @io
+      rescue ArgumentError => e
+        # Specialize only exceptions from Gem::Package::TarHeader.strict_oct
+        raise e unless e.message.match?(/ is not an octal string$/)
+        raise Gem::Package::TarInvalidError, e.message
       end
 
-      @io.read skip # discard trailing zeros
-
-      # make sure nobody can use #read, #getc or #rewind anymore
+      return if header.empty?
+      entry = Gem::Package::TarReader::Entry.new header, @io
+      yield entry
       entry.close
     end
   end
 
-  alias each_entry each
+  alias_method :each_entry, :each
 
   ##
   # NOTE: Do not call #rewind during #each
 
   def rewind
-    if @init_pos == 0 then
-      raise Gem::Package::NonSeekableIO unless @io.respond_to? :rewind
+    if @init_pos == 0
       @io.rewind
     else
-      raise Gem::Package::NonSeekableIO unless @io.respond_to? :pos=
       @io.pos = @init_pos
     end
   end
@@ -105,19 +85,17 @@ class Gem::Package::TarReader
   # yields it.  Rewinds the tar file to the beginning when the block
   # terminates.
 
-  def seek name # :yields: entry
+  def seek(name) # :yields: entry
     found = find do |entry|
       entry.full_name == name
     end
 
     return unless found
 
-    return yield found
+    yield found
   ensure
     rewind
   end
-
 end
 
-require 'rubygems/package/tar_reader/entry'
-
+require_relative "tar_reader/entry"

@@ -1,22 +1,23 @@
-require 'rubygems/command'
+# frozen_string_literal: true
+
+require_relative "../command"
 
 class Gem::Commands::EnvironmentCommand < Gem::Command
-
   def initialize
-    super 'environment', 'Display information about the RubyGems environment'
+    super "environment", "Display information about the RubyGems environment"
   end
 
   def arguments # :nodoc:
     args = <<-EOF
-          packageversion  display the package version
-          gemdir          display the path where gems are installed
-          gempath         display path used to search for gems
+          home            display the path where gems are installed. Aliases: gemhome, gemdir, GEM_HOME
+          path            display path used to search for gems. Aliases: gempath, GEM_PATH
+          user_gemhome    display the path where gems are installed when `--user-install` is given. Aliases: user_gemdir
           version         display the gem format version
           remotesources   display the remote gem servers
           platform        display the supported gem platforms
           <omitted>       display everything
     EOF
-    return args.gsub(/^\s+/, '')
+    args.gsub(/^\s+/, "")
   end
 
   def description # :nodoc:
@@ -71,18 +72,18 @@ lib/rubygems/defaults/operating_system.rb
   end
 
   def execute
-    out = ''
+    out = String.new
     arg = options[:args][0]
     out <<
       case arg
-      when /^packageversion/ then
-        Gem::RubyGemsPackageVersion
       when /^version/ then
         Gem::VERSION
       when /^gemdir/, /^gemhome/, /^home/, /^GEM_HOME/ then
         Gem.dir
       when /^gempath/, /^path/, /^GEM_PATH/ then
         Gem.path.join(File::PATH_SEPARATOR)
+      when /^user_gemdir/, /^user_gemhome/ then
+        Gem.user_dir
       when /^remotesources/ then
         Gem.sources.to_a.join("\n")
       when /^platform/ then
@@ -96,26 +97,28 @@ lib/rubygems/defaults/operating_system.rb
     true
   end
 
-  def add_path out, path
+  def add_path(out, path)
     path.each do |component|
       out << "     - #{component}\n"
     end
   end
 
   def show_environment # :nodoc:
-    out = "RubyGems Environment:\n"
+    out = "RubyGems Environment:\n".dup
 
     out << "  - RUBYGEMS VERSION: #{Gem::VERSION}\n"
 
-    out << "  - RUBY VERSION: #{RUBY_VERSION} (#{RUBY_RELEASE_DATE}"
-    out << " patchlevel #{RUBY_PATCHLEVEL}" if defined? RUBY_PATCHLEVEL
-    out << ") [#{RUBY_PLATFORM}]\n"
+    out << "  - RUBY VERSION: #{RUBY_VERSION} (#{RUBY_RELEASE_DATE} patchlevel #{RUBY_PATCHLEVEL}) [#{RUBY_PLATFORM}]\n"
 
     out << "  - INSTALLATION DIRECTORY: #{Gem.dir}\n"
+
+    out << "  - USER INSTALLATION DIRECTORY: #{Gem.user_dir}\n"
 
     out << "  - RUBYGEMS PREFIX: #{Gem.prefix}\n" unless Gem.prefix.nil?
 
     out << "  - RUBY EXECUTABLE: #{Gem.ruby}\n"
+
+    out << "  - GIT EXECUTABLE: #{git_path}\n"
 
     out << "  - EXECUTABLE DIRECTORY: #{Gem.bindir}\n"
 
@@ -125,7 +128,7 @@ lib/rubygems/defaults/operating_system.rb
 
     out << "  - RUBYGEMS PLATFORMS:\n"
     Gem.platforms.each do |platform|
-      out << "    - #{platform}\n"
+      out << "     - #{platform}\n"
     end
 
     out << "  - GEM PATHS:\n"
@@ -137,7 +140,7 @@ lib/rubygems/defaults/operating_system.rb
 
     out << "  - GEM CONFIGURATION:\n"
     Gem.configuration.each do |name, value|
-      value = value.gsub(/./, '*') if name == 'gemcutter_key'
+      value = value.gsub(/./, "*") if name == "gemcutter_key"
       out << "     - #{name.inspect} => #{value.inspect}\n"
     end
 
@@ -148,11 +151,26 @@ lib/rubygems/defaults/operating_system.rb
 
     out << "  - SHELL PATH:\n"
 
-    shell_path = ENV['PATH'].split(File::PATH_SEPARATOR)
+    shell_path = ENV["PATH"].split(File::PATH_SEPARATOR)
     add_path out, shell_path
 
     out
   end
 
-end
+  private
 
+  ##
+  # Git binary path
+
+  def git_path
+    exts = ENV["PATHEXT"] ? ENV["PATHEXT"].split(";") : [""]
+    ENV["PATH"].split(File::PATH_SEPARATOR).each do |path|
+      exts.each do |ext|
+        exe = File.join(path, "git#{ext}")
+        return exe if File.executable?(exe) && !File.directory?(exe)
+      end
+    end
+
+    nil
+  end
+end

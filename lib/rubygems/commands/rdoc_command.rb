@@ -1,34 +1,36 @@
-require 'rubygems/command'
-require 'rubygems/version_option'
-require 'rubygems/rdoc'
-require 'fileutils'
+# frozen_string_literal: true
+
+require_relative "../command"
+require_relative "../version_option"
+require_relative "../rdoc"
+require "fileutils"
 
 class Gem::Commands::RdocCommand < Gem::Command
   include Gem::VersionOption
 
   def initialize
-    super 'rdoc', 'Generates RDoc for pre-installed gems',
-          :version => Gem::Requirement.default,
-          :include_rdoc => false, :include_ri => true, :overwrite => false
+    super "rdoc", "Generates RDoc for pre-installed gems",
+          version: Gem::Requirement.default,
+          include_rdoc: false, include_ri: true, overwrite: false
 
-    add_option('--all',
-               'Generate RDoc/RI documentation for all',
-               'installed gems') do |value, options|
+    add_option("--all",
+               "Generate RDoc/RI documentation for all",
+               "installed gems") do |value, options|
       options[:all] = value
     end
 
-    add_option('--[no-]rdoc',
-               'Generate RDoc HTML') do |value, options|
+    add_option("--[no-]rdoc",
+               "Generate RDoc HTML") do |value, options|
       options[:include_rdoc] = value
     end
 
-    add_option('--[no-]ri',
-               'Generate RI data') do |value, options|
+    add_option("--[no-]ri",
+               "Generate RI data") do |value, options|
       options[:include_ri] = value
     end
 
-    add_option('--[no-]overwrite',
-               'Overwrite installed documents') do |value, options|
+    add_option("--[no-]overwrite",
+               "Overwrite installed documents") do |value, options|
       options[:overwrite] = value
     end
 
@@ -59,16 +61,16 @@ Use --overwrite to force rebuilding of documentation.
   end
 
   def execute
-    specs = if options[:all] then
-              Gem::Specification.to_a
-            else
-              get_all_gem_names.map do |name|
-                Gem::Specification.find_by_name name, options[:version]
-              end.flatten.uniq
-            end
+    specs = if options[:all]
+      Gem::Specification.to_a
+    else
+      get_all_gem_names.map do |name|
+        Gem::Specification.find_by_name name, options[:version]
+      end.flatten.uniq
+    end
 
-    if specs.empty? then
-      alert_error 'No matching gems found'
+    if specs.empty?
+      alert_error "No matching gems found"
       terminate_interaction 1
     end
 
@@ -77,20 +79,19 @@ Use --overwrite to force rebuilding of documentation.
 
       doc.force = options[:overwrite]
 
-      if options[:overwrite] then
-        FileUtils.rm_rf File.join(spec.doc_dir, 'ri')
-        FileUtils.rm_rf File.join(spec.doc_dir, 'rdoc')
+      if options[:overwrite]
+        FileUtils.rm_rf File.join(spec.doc_dir, "ri")
+        FileUtils.rm_rf File.join(spec.doc_dir, "rdoc")
       end
 
       begin
         doc.generate
       rescue Errno::ENOENT => e
-        e.message =~ / - /
-        alert_error "Unable to document #{spec.full_name}, #{$'} is missing, skipping"
+        match = / - /.match(e.message)
+        alert_error "Unable to document #{spec.full_name}, " \
+                    " #{match.post_match} is missing, skipping"
         terminate_interaction 1 if specs.length == 1
       end
     end
   end
-
 end
-

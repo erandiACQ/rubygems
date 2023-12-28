@@ -1,11 +1,13 @@
+# frozen_string_literal: true
+
 #--
 # Copyright 2006 by Chad Fowler, Rich Kilmer, Jim Weirich and others.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #++
 
-require 'tsort'
-require 'rubygems/deprecate'
+require_relative "tsort"
+require_relative "deprecate"
 
 ##
 # Gem::DependencyList is used for installing and uninstalling gems in the
@@ -19,7 +21,7 @@ class Gem::DependencyList
   attr_reader :specs
 
   include Enumerable
-  include TSort
+  include Gem::TSort
 
   ##
   # Allows enabling/disabling use of development dependencies
@@ -39,7 +41,7 @@ class Gem::DependencyList
   # Creates a new DependencyList.  If +development+ is true, development
   # dependencies will be included.
 
-  def initialize development = false
+  def initialize(development = false)
     @specs = []
 
     @development = development
@@ -78,8 +80,8 @@ class Gem::DependencyList
     seen = {}
 
     sorted.each do |spec|
-      if index = seen[spec.name] then
-        if result[index].version < spec.version then
+      if index = seen[spec.name]
+        if result[index].version < spec.version
           result[index] = spec
         end
       else
@@ -99,11 +101,11 @@ class Gem::DependencyList
   end
 
   def find_name(full_name)
-    @specs.find { |spec| spec.full_name == full_name }
+    @specs.find {|spec| spec.full_name == full_name }
   end
 
   def inspect # :nodoc:
-    "#<%s:0x%x %p>" % [self.class, object_id, map { |s| s.full_name }]
+    format("%s %p>", super[0..-2], map(&:full_name))
   end
 
   ##
@@ -113,16 +115,16 @@ class Gem::DependencyList
     why_not_ok?(:quick).empty?
   end
 
-  def why_not_ok? quick = false
-    unsatisfied = Hash.new { |h,k| h[k] = [] }
+  def why_not_ok?(quick = false)
+    unsatisfied = Hash.new {|h,k| h[k] = [] }
     each do |spec|
       spec.runtime_dependencies.each do |dep|
-        inst = Gem::Specification.any? { |installed_spec|
-          dep.name == installed_spec.name and
-            dep.requirement.satisfied_by? installed_spec.version
-        }
+        inst = Gem::Specification.any? do |installed_spec|
+          dep.name == installed_spec.name &&
+            dep.requirement.satisfied_by?(installed_spec.version)
+        end
 
-        unless inst or @specs.find { |s| s.satisfies_requirement? dep } then
+        unless inst || @specs.find {|s| s.satisfies_requirement? dep }
           unsatisfied[spec.name] << dep
           return unsatisfied if quick
         end
@@ -133,7 +135,7 @@ class Gem::DependencyList
   end
 
   ##
-  # Is is ok to remove a gemspec from the dependency list?
+  # It is ok to remove a gemspec from the dependency list?
   #
   # If removing the gemspec creates breaks a currently ok dependency, then it
   # is NOT ok to remove the gemspec.
@@ -141,10 +143,13 @@ class Gem::DependencyList
   def ok_to_remove?(full_name, check_dev=true)
     gem_to_remove = find_name full_name
 
-    siblings = @specs.find_all { |s|
+    # If the state is inconsistent, at least don't crash
+    return true unless gem_to_remove
+
+    siblings = @specs.find_all do |s|
       s.name == gem_to_remove.name &&
         s.full_name != gem_to_remove.full_name
-    }
+    end
 
     deps = []
 
@@ -156,11 +161,11 @@ class Gem::DependencyList
       end
     end
 
-    deps.all? { |dep|
-      siblings.any? { |s|
+    deps.all? do |dep|
+      siblings.any? do |s|
         s.satisfies_requirement? dep
-      }
-    }
+      end
+    end
   end
 
   ##
@@ -168,18 +173,18 @@ class Gem::DependencyList
   # satisfy items in +dependencies+ (a hash of gem names to arrays of
   # dependencies).
 
-  def remove_specs_unsatisfied_by dependencies
-    specs.reject! { |spec|
+  def remove_specs_unsatisfied_by(dependencies)
+    specs.reject! do |spec|
       dep = dependencies[spec.name]
-      dep and not dep.requirement.satisfied_by? spec.version
-    }
+      dep && !dep.requirement.satisfied_by?(spec.version)
+    end
   end
 
   ##
   # Removes the gemspec matching +full_name+ from the dependency list
 
   def remove_by_name(full_name)
-    @specs.delete_if { |spec| spec.full_name == full_name }
+    @specs.delete_if {|spec| spec.full_name == full_name }
   end
 
   ##
@@ -187,7 +192,7 @@ class Gem::DependencyList
   # gemspecs that have a dependency satisfied by the named gemspec.
 
   def spec_predecessors
-    result = Hash.new { |h,k| h[k] = [] }
+    result = Hash.new {|h,k| h[k] = [] }
 
     specs = @specs.sort.reverse
 
@@ -196,7 +201,7 @@ class Gem::DependencyList
         next if spec == other
 
         other.dependencies.each do |dep|
-          if spec.satisfies_requirement? dep then
+          if spec.satisfies_requirement? dep
             result[spec] << other
           end
         end
@@ -218,7 +223,7 @@ class Gem::DependencyList
 
     dependencies.each do |dep|
       specs.each do |spec|
-        if spec.satisfies_requirement? dep then
+        if spec.satisfies_requirement? dep
           yield spec
           break
         end
@@ -233,8 +238,6 @@ class Gem::DependencyList
   # +ignored+.
 
   def active_count(specs, ignored)
-    specs.count { |spec| ignored[spec.full_name].nil? }
+    specs.count {|spec| ignored[spec.full_name].nil? }
   end
-
 end
-

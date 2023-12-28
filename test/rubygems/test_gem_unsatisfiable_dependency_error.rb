@@ -1,11 +1,12 @@
-require 'rubygems/test_case'
+# frozen_string_literal: true
+
+require_relative "helper"
 
 class TestGemUnsatisfiableDependencyError < Gem::TestCase
-
   def setup
     super
 
-    @a_dep = dep 'a', '~> 1'
+    @a_dep = dep "a", "~> 1"
 
     @req = Gem::Resolver::DependencyRequest.new @a_dep, nil
 
@@ -21,12 +22,10 @@ class TestGemUnsatisfiableDependencyError < Gem::TestCase
   end
 
   def test_name
-    assert_equal 'a', @e.name
+    assert_equal "a", @e.name
   end
 
   def test_version
     assert_equal @a_dep.requirement, @e.version
   end
-
 end
-

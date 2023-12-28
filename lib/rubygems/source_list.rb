@@ -1,4 +1,4 @@
-require 'rubygems/source'
+# frozen_string_literal: true
 
 ##
 # The SourceList represents the sources rubygems has been configured to use.
@@ -9,12 +9,11 @@ require 'rubygems/source'
 # Or by adding them:
 #
 #   sources = Gem::SourceList.new
-#   sources.add 'https://rubygems.example'
+#   sources << 'https://rubygems.example'
 #
 # The most common way to get a SourceList is Gem.sources.
 
 class Gem::SourceList
-
   include Enumerable
 
   ##
@@ -37,7 +36,7 @@ class Gem::SourceList
 
     list.replace ary
 
-    return list
+    list
   end
 
   def initialize_copy(other) # :nodoc:
@@ -50,15 +49,13 @@ class Gem::SourceList
 
   def <<(obj)
     src = case obj
-          when URI
-            Gem::Source.new(obj)
           when Gem::Source
             obj
           else
-            Gem::Source.new(URI.parse(obj))
-          end
+            Gem::Source.new(obj)
+    end
 
-    @sources << src
+    @sources << src unless @sources.include?(src)
     src
   end
 
@@ -87,7 +84,7 @@ class Gem::SourceList
   # Yields each source URI in the list.
 
   def each
-    @sources.each { |s| yield s.uri.to_s }
+    @sources.each {|s| yield s.uri.to_s }
   end
 
   ##
@@ -104,7 +101,7 @@ class Gem::SourceList
     @sources.empty?
   end
 
-  def == other # :nodoc:
+  def ==(other) # :nodoc:
     to_a == other
   end
 
@@ -112,7 +109,7 @@ class Gem::SourceList
   # Returns an Array of source URI Strings.
 
   def to_a
-    @sources.map { |x| x.uri.to_s }
+    @sources.map {|x| x.uri.to_s }
   end
 
   alias_method :to_ary, :to_a
@@ -129,21 +126,21 @@ class Gem::SourceList
   # Gem::Source or a source URI.
 
   def include?(other)
-    if other.kind_of? Gem::Source
+    if other.is_a? Gem::Source
       @sources.include? other
     else
-      @sources.find { |x| x.uri.to_s == other.to_s }
+      @sources.find {|x| x.uri.to_s == other.to_s }
     end
   end
 
   ##
   # Deletes +source+ from the source list which may be a Gem::Source or a URI.
 
-  def delete source
-    if source.kind_of? Gem::Source
+  def delete(source)
+    if source.is_a? Gem::Source
       @sources.delete source
     else
-      @sources.delete_if { |x| x.uri.to_s == source.to_s }
+      @sources.delete_if {|x| x.uri.to_s == source.to_s }
     end
   end
 end

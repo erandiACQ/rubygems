@@ -1,40 +1,39 @@
-# coding: UTF-8
+# frozen_string_literal: true
 
-require 'rubygems/test_case'
+require_relative "helper"
 
-unless defined?(OpenSSL::SSL) then
-  warn 'Skipping Gem::Security::Policy tests.  openssl not found.'
+unless Gem::HAVE_OPENSSL
+  warn "Skipping Gem::Security::Policy tests.  openssl not found."
 end
 
 class TestGemSecurityPolicy < Gem::TestCase
+  ALTERNATE_KEY    = load_key "alternate"
+  INVALID_KEY      = load_key "invalid"
+  CHILD_KEY        = load_key "child"
+  GRANDCHILD_KEY   = load_key "grandchild"
+  INVALIDCHILD_KEY = load_key "invalidchild"
 
-  ALTERNATE_KEY    = load_key 'alternate'
-  INVALID_KEY      = load_key 'invalid'
-  CHILD_KEY        = load_key 'child'
-  GRANDCHILD_KEY   = load_key 'grandchild'
-  INVALIDCHILD_KEY = load_key 'invalidchild'
-
-  ALTERNATE_CERT      = load_cert 'alternate'
-  CA_CERT             = load_cert 'ca'
-  CHILD_CERT          = load_cert 'child'
-  EXPIRED_CERT        = load_cert 'expired'
-  FUTURE_CERT         = load_cert 'future'
-  GRANDCHILD_CERT     = load_cert 'grandchild'
-  INVALIDCHILD_CERT   = load_cert 'invalidchild'
-  INVALID_ISSUER_CERT = load_cert 'invalid_issuer'
-  INVALID_SIGNER_CERT = load_cert 'invalid_signer'
-  WRONG_KEY_CERT      = load_cert 'wrong_key'
+  ALTERNATE_CERT      = load_cert "alternate"
+  CA_CERT             = load_cert "ca"
+  CHILD_CERT          = load_cert "child"
+  EXPIRED_CERT        = load_cert "expired"
+  FUTURE_CERT         = load_cert "future"
+  GRANDCHILD_CERT     = load_cert "grandchild"
+  INVALIDCHILD_CERT   = load_cert "invalidchild"
+  INVALID_ISSUER_CERT = load_cert "invalid_issuer"
+  INVALID_SIGNER_CERT = load_cert "invalid_signer"
+  WRONG_KEY_CERT      = load_cert "wrong_key"
 
   def setup
     super
 
-    @spec = quick_gem 'a' do |s|
-      s.description = 'π'
+    @spec = quick_gem "a" do |s|
+      s.description = "π"
       s.files = %w[lib/code.rb]
     end
 
-    @sha1 = OpenSSL::Digest::SHA1
-    @trust_dir = Gem::Security.trust_dir.dir # HACK use the object
+    @digest = OpenSSL::Digest.new Gem::Security::DIGEST_NAME
+    @trust_dir = Gem::Security.trust_dir.dir # HACK: use the object
 
     @no        = Gem::Security::NoSecurity
     @almost_no = Gem::Security::AlmostNoSecurity
@@ -43,46 +42,46 @@ class TestGemSecurityPolicy < Gem::TestCase
     @high      = Gem::Security::HighSecurity
 
     @chain = Gem::Security::Policy.new(
-      'Chain',
-      :verify_data   => true,
-      :verify_signer => true,
-      :verify_chain  => true,
-      :verify_root   => false,
-      :only_trusted  => false,
-      :only_signed   => false
+      "Chain",
+      verify_data: true,
+      verify_signer: true,
+      verify_chain: true,
+      verify_root: false,
+      only_trusted: false,
+      only_signed: false
     )
 
     @root = Gem::Security::Policy.new(
-      'Root',
-      :verify_data   => true,
-      :verify_signer => true,
-      :verify_chain  => true,
-      :verify_root   => true,
-      :only_trusted  => false,
-      :only_signed   => false
+      "Root",
+      verify_data: true,
+      verify_signer: true,
+      verify_chain: true,
+      verify_root: true,
+      only_trusted: false,
+      only_signed: false
     )
   end
 
   def test_check_data
-    data = digest 'hello'
+    data = digest "hello"
 
     signature = sign data
 
-    assert @almost_no.check_data(PUBLIC_KEY, @sha1, signature, data)
+    assert @almost_no.check_data(PUBLIC_KEY, @digest, signature, data)
   end
 
   def test_check_data_invalid
-    data = digest 'hello'
+    data = digest "hello"
 
     signature = sign data
 
-    invalid = digest 'hello!'
+    invalid = digest "hello!"
 
-    e = assert_raises Gem::Security::Exception do
-      @almost_no.check_data PUBLIC_KEY, @sha1, signature, invalid
+    e = assert_raise Gem::Security::Exception do
+      @almost_no.check_data PUBLIC_KEY, @digest, signature, invalid
     end
 
-    assert_equal 'invalid signature', e.message
+    assert_equal "invalid signature", e.message
   end
 
   def test_check_chain
@@ -92,31 +91,31 @@ class TestGemSecurityPolicy < Gem::TestCase
   end
 
   def test_check_chain_empty_chain
-    e = assert_raises Gem::Security::Exception do
+    e = assert_raise Gem::Security::Exception do
       @chain.check_chain [], Time.now
     end
 
-    assert_equal 'empty signing chain', e.message
+    assert_equal "empty signing chain", e.message
   end
 
   def test_check_chain_invalid
     chain = [PUBLIC_CERT, CHILD_CERT, INVALIDCHILD_CERT]
 
-    e = assert_raises Gem::Security::Exception do
+    e = assert_raise Gem::Security::Exception do
       @chain.check_chain chain, Time.now
     end
 
-    assert_equal "invalid signing chain: " +
-                 "certificate #{INVALIDCHILD_CERT.subject} " +
+    assert_equal "invalid signing chain: " \
+                 "certificate #{INVALIDCHILD_CERT.subject} " \
                  "was not issued by #{CHILD_CERT.subject}", e.message
   end
 
   def test_check_chain_no_chain
-    e = assert_raises Gem::Security::Exception do
+    e = assert_raise Gem::Security::Exception do
       @chain.check_chain nil, Time.now
     end
 
-    assert_equal 'missing signing chain', e.message
+    assert_equal "missing signing chain", e.message
   end
 
   def test_check_cert
@@ -124,31 +123,31 @@ class TestGemSecurityPolicy < Gem::TestCase
   end
 
   def test_check_cert_expired
-    e = assert_raises Gem::Security::Exception do
+    e = assert_raise Gem::Security::Exception do
       @low.check_cert EXPIRED_CERT, nil, Time.now
     end
 
-    assert_equal "certificate #{EXPIRED_CERT.subject} " +
+    assert_equal "certificate #{EXPIRED_CERT.subject} " \
                  "not valid after #{EXPIRED_CERT.not_after}",
                  e.message
   end
 
   def test_check_cert_future
-    e = assert_raises Gem::Security::Exception do
+    e = assert_raise Gem::Security::Exception do
       @low.check_cert FUTURE_CERT, nil, Time.now
     end
 
-    assert_equal "certificate #{FUTURE_CERT.subject} " +
+    assert_equal "certificate #{FUTURE_CERT.subject} " \
                  "not valid before #{FUTURE_CERT.not_before}",
                  e.message
   end
 
   def test_check_cert_invalid_issuer
-    e = assert_raises Gem::Security::Exception do
+    e = assert_raise Gem::Security::Exception do
       @low.check_cert INVALID_ISSUER_CERT, PUBLIC_CERT, Time.now
     end
 
-    assert_equal "certificate #{INVALID_ISSUER_CERT.subject} " +
+    assert_equal "certificate #{INVALID_ISSUER_CERT.subject} " \
                  "was not issued by #{PUBLIC_CERT.subject}",
                  e.message
   end
@@ -158,11 +157,11 @@ class TestGemSecurityPolicy < Gem::TestCase
   end
 
   def test_check_cert_no_signer
-    e = assert_raises Gem::Security::Exception do
+    e = assert_raise Gem::Security::Exception do
       @high.check_cert(nil, nil, Time.now)
     end
 
-    assert_equal 'missing signing certificate', e.message
+    assert_equal "missing signing certificate", e.message
   end
 
   def test_check_key
@@ -172,19 +171,19 @@ class TestGemSecurityPolicy < Gem::TestCase
   def test_check_key_no_signer
     assert @almost_no.check_key(nil, nil)
 
-    e = assert_raises Gem::Security::Exception do
+    e = assert_raise Gem::Security::Exception do
       @high.check_key(nil, nil)
     end
 
-    assert_equal 'missing key or signature', e.message
+    assert_equal "missing key or signature", e.message
   end
 
   def test_check_key_wrong_key
-    e = assert_raises Gem::Security::Exception do
+    e = assert_raise Gem::Security::Exception do
       @almost_no.check_key(PUBLIC_CERT, ALTERNATE_KEY)
     end
 
-    assert_equal "certificate #{PUBLIC_CERT.subject} " +
+    assert_equal "certificate #{PUBLIC_CERT.subject} " \
                  "does not match the signing key", e.message
   end
 
@@ -195,21 +194,21 @@ class TestGemSecurityPolicy < Gem::TestCase
   end
 
   def test_check_root_empty_chain
-    e = assert_raises Gem::Security::Exception do
+    e = assert_raise Gem::Security::Exception do
       @chain.check_root [], Time.now
     end
 
-    assert_equal 'missing root certificate', e.message
+    assert_equal "missing root certificate", e.message
   end
 
   def test_check_root_invalid_signer
     chain = [INVALID_SIGNER_CERT]
 
-    e = assert_raises Gem::Security::Exception do
+    e = assert_raise Gem::Security::Exception do
       @chain.check_root chain, Time.now
     end
 
-    assert_equal "certificate #{INVALID_SIGNER_CERT.subject} " +
+    assert_equal "certificate #{INVALID_SIGNER_CERT.subject} " \
                  "was not issued by #{INVALID_SIGNER_CERT.issuer}",
                  e.message
   end
@@ -217,82 +216,82 @@ class TestGemSecurityPolicy < Gem::TestCase
   def test_check_root_not_self_signed
     chain = [INVALID_ISSUER_CERT]
 
-    e = assert_raises Gem::Security::Exception do
+    e = assert_raise Gem::Security::Exception do
       @chain.check_root chain, Time.now
     end
 
-    assert_equal "root certificate #{INVALID_ISSUER_CERT.subject} " +
+    assert_equal "root certificate #{INVALID_ISSUER_CERT.subject} " \
                  "is not self-signed (issuer #{INVALID_ISSUER_CERT.issuer})",
                  e.message
   end
 
   def test_check_root_no_chain
-    e = assert_raises Gem::Security::Exception do
+    e = assert_raise Gem::Security::Exception do
       @chain.check_root nil, Time.now
     end
 
-    assert_equal 'missing signing chain', e.message
+    assert_equal "missing signing chain", e.message
   end
 
   def test_check_trust
     Gem::Security.trust_dir.trust_cert PUBLIC_CERT
 
-    assert @high.check_trust [PUBLIC_CERT], @sha1, @trust_dir
+    assert @high.check_trust [PUBLIC_CERT], @digest, @trust_dir
   end
 
   def test_check_trust_child
     Gem::Security.trust_dir.trust_cert PUBLIC_CERT
 
-    assert @high.check_trust [PUBLIC_CERT, CHILD_CERT], @sha1, @trust_dir
+    assert @high.check_trust [PUBLIC_CERT, CHILD_CERT], @digest, @trust_dir
   end
 
   def test_check_trust_empty_chain
-    e = assert_raises Gem::Security::Exception do
-      @chain.check_trust [], @sha1, @trust_dir
+    e = assert_raise Gem::Security::Exception do
+      @chain.check_trust [], @digest, @trust_dir
     end
 
-    assert_equal 'missing root certificate', e.message
+    assert_equal "missing root certificate", e.message
   end
 
   def test_check_trust_mismatch
     Gem::Security.trust_dir.trust_cert PUBLIC_CERT
 
-    e = assert_raises Gem::Security::Exception do
-      @high.check_trust [WRONG_KEY_CERT], @sha1, @trust_dir
+    e = assert_raise Gem::Security::Exception do
+      @high.check_trust [WRONG_KEY_CERT], @digest, @trust_dir
     end
 
-    assert_equal "trusted root certificate #{PUBLIC_CERT.subject} checksum " +
+    assert_equal "trusted root certificate #{PUBLIC_CERT.subject} checksum " \
                  "does not match signing root certificate checksum", e.message
   end
 
   def test_check_trust_no_chain
-    e = assert_raises Gem::Security::Exception do
-      @chain.check_trust nil, @sha1, @trust_dir
+    e = assert_raise Gem::Security::Exception do
+      @chain.check_trust nil, @digest, @trust_dir
     end
 
-    assert_equal 'missing signing chain', e.message
+    assert_equal "missing signing chain", e.message
   end
 
   def test_check_trust_no_trust
-    e = assert_raises Gem::Security::Exception do
-      @high.check_trust [PUBLIC_CERT], @sha1, @trust_dir
+    e = assert_raise Gem::Security::Exception do
+      @high.check_trust [PUBLIC_CERT], @digest, @trust_dir
     end
 
     assert_equal "root cert #{PUBLIC_CERT.subject} is not trusted", e.message
   end
 
   def test_check_trust_no_trust_child
-    e = assert_raises Gem::Security::Exception do
-      @high.check_trust [PUBLIC_CERT, CHILD_CERT], @sha1, @trust_dir
+    e = assert_raise Gem::Security::Exception do
+      @high.check_trust [PUBLIC_CERT, CHILD_CERT], @digest, @trust_dir
     end
 
-    assert_equal "root cert #{PUBLIC_CERT.subject} is not trusted " +
+    assert_equal "root cert #{PUBLIC_CERT.subject} is not trusted " \
                  "(root of signing cert #{CHILD_CERT.subject})", e.message
   end
 
   def test_subject
-    assert_equal 'email:nobody@example', @no.subject(PUBLIC_CERT)
-    assert_equal '/C=JP/O=JIN.GR.JP/OU=RRR/CN=CA', @no.subject(CA_CERT)
+    assert_equal "email:nobody@example", @no.subject(PUBLIC_CERT)
+    assert_equal "/C=JP/ST=Tokyo/O=RubyGemsTest/CN=CA", @no.subject(CA_CERT)
   end
 
   def test_verify
@@ -316,11 +315,11 @@ class TestGemSecurityPolicy < Gem::TestCase
 
     _, signatures = dummy_signatures
 
-    e = assert_raises Gem::Security::Exception do
+    e = assert_raise Gem::Security::Exception do
       @almost_no.verify [PUBLIC_CERT], nil, {}, signatures
     end
 
-    assert_equal 'no digests provided (probable bug)', e.message
+    assert_equal "no digests provided (probable bug)", e.message
   end
 
   def test_verify_no_digests_no_security
@@ -328,11 +327,11 @@ class TestGemSecurityPolicy < Gem::TestCase
 
     _, signatures = dummy_signatures
 
-    e = assert_raises Gem::Security::Exception do
+    e = assert_raise Gem::Security::Exception do
       @no.verify [PUBLIC_CERT], nil, {}, signatures
     end
 
-    assert_equal 'missing digest for 0', e.message
+    assert_equal "missing digest for 0", e.message
   end
 
   def test_verify_no_signatures
@@ -341,12 +340,12 @@ class TestGemSecurityPolicy < Gem::TestCase
     digests, = dummy_signatures
 
     use_ui @ui do
-      @no.verify [PUBLIC_CERT], nil, digests, {}, 'some_gem'
+      @no.verify [PUBLIC_CERT], nil, digests, {}, "some_gem"
     end
 
     assert_match "WARNING:  some_gem is not signed\n", @ui.error
 
-    assert_raises Gem::Security::Exception do
+    assert_raise Gem::Security::Exception do
       @high.verify [PUBLIC_CERT], nil, digests, {}
     end
   end
@@ -355,7 +354,7 @@ class TestGemSecurityPolicy < Gem::TestCase
     Gem::Security.trust_dir.trust_cert PUBLIC_CERT
 
     use_ui @ui do
-      @no.verify [PUBLIC_CERT], nil, {}, {}, 'some_gem'
+      @no.verify [PUBLIC_CERT], nil, {}, {}, "some_gem"
     end
 
     assert_empty @ui.output
@@ -367,28 +366,28 @@ class TestGemSecurityPolicy < Gem::TestCase
 
     digests, signatures = dummy_signatures
 
-    data = digest 'goodbye'
+    data = digest "goodbye"
 
-    signatures[1] = PRIVATE_KEY.sign @sha1.new, data.digest
+    signatures[1] = PRIVATE_KEY.sign @digest.new, data.digest
 
-    e = assert_raises Gem::Security::Exception do
+    e = assert_raise Gem::Security::Exception do
       @almost_no.verify [PUBLIC_CERT], nil, digests, signatures
     end
 
-    assert_equal 'missing digest for 1', e.message
+    assert_equal "missing digest for 1", e.message
   end
 
   def test_verify_no_trust
     digests, signatures = dummy_signatures
 
     use_ui @ui do
-      @low.verify [PUBLIC_CERT], nil, digests, signatures, 'some_gem'
+      @low.verify [PUBLIC_CERT], nil, digests, signatures, "some_gem"
     end
 
     assert_equal "WARNING:  email:nobody@example is not trusted for some_gem\n",
                  @ui.error
 
-    assert_raises Gem::Security::Exception do
+    assert_raise Gem::Security::Exception do
       @medium.verify [PUBLIC_CERT], nil, digests, signatures
     end
   end
@@ -396,20 +395,18 @@ class TestGemSecurityPolicy < Gem::TestCase
   def test_verify_wrong_digest_type
     Gem::Security.trust_dir.trust_cert PUBLIC_CERT
 
-    sha512 = OpenSSL::Digest::SHA512
+    data = OpenSSL::Digest.new("SHA512")
+    data << "hello"
 
-    data = sha512.new
-    data << 'hello'
-
-    digests    = { 'SHA512' => { 0 => data } }
-    signature  = PRIVATE_KEY.sign sha512.new, data.digest
+    digests    = { "SHA512" => { 0 => data } }
+    signature  = PRIVATE_KEY.sign "sha512", data.digest
     signatures = { 0 => signature }
 
-    e = assert_raises Gem::Security::Exception do
+    e = assert_raise Gem::Security::Exception do
       @almost_no.verify [PUBLIC_CERT], nil, digests, signatures
     end
 
-    assert_equal 'no digests provided (probable bug)', e.message
+    assert_equal "no digests provided (probable bug)", e.message
   end
 
   def test_verify_signatures_chain
@@ -449,20 +446,22 @@ class TestGemSecurityPolicy < Gem::TestCase
 
     @spec.cert_chain = [PUBLIC_CERT.to_s]
 
-    metadata_gz = Gem.gzip @spec.to_yaml
+    metadata_gz = Gem::Util.gzip @spec.to_yaml
 
-    package = Gem::Package.new 'nonexistent.gem'
-    package.checksums['SHA1'] = {}
+    package = Gem::Package.new "nonexistent.gem"
+    package.checksums[Gem::Security::DIGEST_NAME] = {}
 
     s = StringIO.new metadata_gz
-    def s.full_name() 'metadata.gz' end
+    def s.full_name
+      "metadata.gz"
+    end
 
     digests = package.digest s
-    metadata_gz_digest = digests['SHA1']['metadata.gz']
+    metadata_gz_digest = digests[Gem::Security::DIGEST_NAME]["metadata.gz"]
 
     signatures = {}
-    signatures['metadata.gz'] =
-      PRIVATE_KEY.sign @sha1.new, metadata_gz_digest.digest
+    signatures["metadata.gz"] =
+      PRIVATE_KEY.sign @digest.new, metadata_gz_digest.digest
 
     assert @high.verify_signatures @spec, digests, signatures
   end
@@ -472,28 +471,30 @@ class TestGemSecurityPolicy < Gem::TestCase
 
     @spec.cert_chain = [PUBLIC_CERT.to_s]
 
-    metadata_gz = Gem.gzip @spec.to_yaml
+    metadata_gz = Gem::Util.gzip @spec.to_yaml
 
-    package = Gem::Package.new 'nonexistent.gem'
-    package.checksums['SHA1'] = {}
+    package = Gem::Package.new "nonexistent.gem"
+    package.checksums[Gem::Security::DIGEST_NAME] = {}
 
     s = StringIO.new metadata_gz
-    def s.full_name() 'metadata.gz' end
+    def s.full_name
+      "metadata.gz"
+    end
 
     digests = package.digest s
-    digests['SHA1']['data.tar.gz'] = OpenSSL::Digest.new 'SHA1', 'hello'
+    digests[Gem::Security::DIGEST_NAME]["data.tar.gz"] = @digest.hexdigest "hello"
 
-    metadata_gz_digest = digests['SHA1']['metadata.gz']
+    metadata_gz_digest = digests[Gem::Security::DIGEST_NAME]["metadata.gz"]
 
     signatures = {}
-    signatures['metadata.gz'] =
-      PRIVATE_KEY.sign @sha1.new, metadata_gz_digest.digest
+    signatures["metadata.gz"] =
+      PRIVATE_KEY.sign @digest.new, metadata_gz_digest.digest
 
-    e = assert_raises Gem::Security::Exception do
+    e = assert_raise Gem::Security::Exception do
       @high.verify_signatures @spec, digests, signatures
     end
 
-    assert_equal 'missing signature for data.tar.gz', e.message
+    assert_equal "missing signature for data.tar.gz", e.message
   end
 
   def test_verify_signatures_none
@@ -501,40 +502,40 @@ class TestGemSecurityPolicy < Gem::TestCase
 
     @spec.cert_chain = [PUBLIC_CERT.to_s]
 
-    metadata_gz = Gem.gzip @spec.to_yaml
+    metadata_gz = Gem::Util.gzip @spec.to_yaml
 
-    package = Gem::Package.new 'nonexistent.gem'
-    package.checksums['SHA1'] = {}
+    package = Gem::Package.new "nonexistent.gem"
+    package.checksums[Gem::Security::DIGEST_NAME] = {}
 
     s = StringIO.new metadata_gz
-    def s.full_name() 'metadata.gz' end
+    def s.full_name
+      "metadata.gz"
+    end
 
     digests = package.digest s
-    digests['SHA1']['data.tar.gz'] = OpenSSL::Digest.new 'SHA1', 'hello'
+    digests[Gem::Security::DIGEST_NAME]["data.tar.gz"] = @digest.hexdigest "hello"
 
-    assert_raises Gem::Security::Exception do
+    assert_raise Gem::Security::Exception do
       @high.verify_signatures @spec, digests, {}
     end
   end
 
-  def digest data
-    digester = @sha1.new
+  def digest(data)
+    digester = @digest.new
     digester << data
     digester
   end
 
-  def sign data, key = PRIVATE_KEY
-    key.sign @sha1.new, data.digest
+  def sign(data, key = PRIVATE_KEY)
+    key.sign @digest.new, data.digest
   end
 
-  def dummy_signatures key = PRIVATE_KEY
-    data = digest 'hello'
+  def dummy_signatures(key = PRIVATE_KEY)
+    data = digest "hello"
 
-    digests    = { 'SHA1' => { 0 => data } }
+    digests    = { Gem::Security::DIGEST_NAME => { 0 => data } }
     signatures = { 0 => sign(data, key) }
 
-    return digests, signatures
+    [digests, signatures]
   end
-
-end if defined?(OpenSSL::SSL)
-
+end if Gem::HAVE_OPENSSL

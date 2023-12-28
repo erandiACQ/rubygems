@@ -1,15 +1,17 @@
+# frozen_string_literal: true
+
 #--
 # Copyright 2006 by Chad Fowler, Rich Kilmer, Jim Weirich and others.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #++
 
-require 'rubygems/command'
-require 'rubygems/exceptions'
-require 'rubygems/package'
-require 'rubygems/ext'
-require 'rubygems/user_interaction'
-require 'fileutils'
+require_relative "installer_uninstaller_utils"
+require_relative "exceptions"
+require_relative "deprecate"
+require_relative "package"
+require_relative "ext"
+require_relative "user_interaction"
 
 ##
 # The installer installs the files contained in the .gem into the Gem.home.
@@ -25,12 +27,13 @@ require 'fileutils'
 # file.  See Gem.pre_install and Gem.post_install for details.
 
 class Gem::Installer
+  extend Gem::Deprecate
 
   ##
   # Paths where env(1) might live.  Some systems are broken and have it in
   # /bin
 
-  ENV_PATHS = %w[/usr/bin/env /bin/env]
+  ENV_PATHS = %w[/usr/bin/env /bin/env].freeze
 
   ##
   # Deprecated in favor of Gem::Ext::BuildError
@@ -39,10 +42,7 @@ class Gem::Installer
 
   include Gem::UserInteraction
 
-  ##
-  # Filename of the gem being installed.
-
-  attr_reader :gem
+  include Gem::InstallerUninstallerUtils
 
   ##
   # The directory a gem's executables will be installed into
@@ -62,26 +62,34 @@ class Gem::Installer
   attr_reader :options
 
   ##
-  # Sets the specification for .gem-less installs.
+  # The gem package instance.
 
-  attr_writer :spec
+  attr_reader :package
 
   @path_warning = false
 
-  @install_lock = Mutex.new
-
   class << self
+    #
+    # Changes in rubygems to lazily loading `rubygems/command` (in order to
+    # lazily load `optparse` as a side effect) affect bundler's custom installer
+    # which uses `Gem::Command` without requiring it (up until bundler 2.2.29).
+    # This hook is to compensate for that missing require.
+    #
+    # TODO: Remove when rubygems no longer supports running on bundler older
+    # than 2.2.29.
+
+    def inherited(klass)
+      if klass.name == "Bundler::RubyGemsGemInstaller"
+        require "rubygems/command"
+      end
+
+      super(klass)
+    end
 
     ##
     # True if we've warned about PATH not including Gem.bindir
 
     attr_accessor :path_warning
-
-    ##
-    # Certain aspects of the install process are not thread-safe. This lock is
-    # used to allow multiple threads to install Gems at the same time.
-
-    attr_reader :install_lock
 
     ##
     # Overrides the executable format.
@@ -96,12 +104,58 @@ class Gem::Installer
     def exec_format
       @exec_format ||= Gem.default_exec_format
     end
-
   end
 
   ##
-  # Constructs an Installer instance that will install the gem located at
-  # +gem+.  +options+ is a Hash with the following keys:
+  # Construct an installer object for the gem file located at +path+
+
+  def self.at(path, options = {})
+    security_policy = options[:security_policy]
+    package = Gem::Package.new path, security_policy
+    new package, options
+  end
+
+  class FakePackage
+    attr_accessor :spec
+
+    attr_accessor :dir_mode
+    attr_accessor :prog_mode
+    attr_accessor :data_mode
+
+    def initialize(spec)
+      @spec = spec
+    end
+
+    def extract_files(destination_dir, pattern = "*")
+      FileUtils.mkdir_p destination_dir
+
+      spec.files.each do |file|
+        file = File.join destination_dir, file
+        next if File.exist? file
+        FileUtils.mkdir_p File.dirname(file)
+        File.open file, "w" do |fp|
+          fp.puts "# #{file}"
+        end
+      end
+    end
+
+    def copy_to(path)
+    end
+  end
+
+  ##
+  # Construct an installer object for an ephemeral gem (one where we don't
+  # actually have a .gem file, just a spec)
+
+  def self.for_spec(spec, options = {})
+    # FIXME: we should have a real Package class for this
+    new FakePackage.new(spec), options
+  end
+
+  ##
+  # Constructs an Installer instance that will install the gem at +package+ which
+  # can either be a path or an instance of Gem::Package.  +options+ is a Hash
+  # with the following keys:
   #
   # :bin_dir:: Where to put a bin wrapper if needed.
   # :development:: Whether or not development dependencies should be installed.
@@ -121,21 +175,26 @@ class Gem::Installer
   # :wrappers:: Install wrappers if true, symlinks if false.
   # :build_args:: An Array of arguments to pass to the extension builder
   #               process. If not set, then Gem::Command.build_args is used
+  # :post_install_message:: Print gem post install message if true
 
-  def initialize(gem, options={})
-    require 'fileutils'
+  def initialize(package, options={})
+    require "fileutils"
 
-    @gem = gem
     @options = options
-    @package = Gem::Package.new @gem
+    @package = package
 
     process_options
 
-    @package.security_policy = @security_policy
+    @package.dir_mode = options[:dir_mode]
+    @package.prog_mode = options[:prog_mode]
+    @package.data_mode = options[:data_mode]
 
-    if options[:user_install] and not options[:unpack] then
-      @gem_home = Gem.user_dir
-      @bin_dir = Gem.bindir gem_home unless options[:bin_dir]
+    if @gem_home == Gem.user_dir
+      # If we get here, then one of the following likely happened:
+      # - `--user-install` was specified
+      # - `Gem::PathSupport#home` fell back to `Gem.user_dir`
+      # - GEM_HOME was manually set to `Gem.user_dir`
+
       check_that_user_bin_dir_is_in_path
     end
   end
@@ -145,15 +204,15 @@ class Gem::Installer
   #
   # If +@force+ is set +filename+ is overwritten.
   #
-  # If +filename+ exists and is a RubyGems wrapper for different gem the user
-  # is consulted.
+  # If +filename+ exists and it is a RubyGems wrapper for a different gem, then
+  # the user is consulted.
   #
   # If +filename+ exists and +@bin_dir+ is Gem.default_bindir (/usr/local) the
   # user is consulted.
   #
   # Otherwise +filename+ is overwritten.
 
-  def check_executable_overwrite filename # :nodoc:
+  def check_executable_overwrite(filename) # :nodoc:
     return if @force
 
     generated_bin = File.join @bin_dir, formatted_program_filename(filename)
@@ -163,27 +222,45 @@ class Gem::Installer
     ruby_executable = false
     existing = nil
 
-    open generated_bin, 'rb' do |io|
-      next unless io.gets =~ /^#!/ # shebang
+    File.open generated_bin, "rb" do |io|
+      line = io.gets
+      shebang = /^#!.*ruby/o
+
+      # TruffleRuby uses a bash prelude in default launchers
+      if load_relative_enabled? || RUBY_ENGINE == "truffleruby"
+        until line.nil? || shebang.match?(line) do
+          line = io.gets
+        end
+      end
+
+      next unless line&.match?(shebang)
+
       io.gets # blankline
 
-      # TODO detect a specially formatted comment instead of trying
-      # to run a regexp against Ruby code.
-      next unless io.gets =~ /This file was generated by RubyGems/
+      # TODO: detect a specially formatted comment instead of trying
+      # to find a string inside Ruby code.
+      next unless io.gets&.include?("This file was generated by RubyGems")
 
       ruby_executable = true
-      existing = io.read.slice(/^gem (['"])(.*?)(\1),/, 2)
+      existing = io.read.slice(/
+          ^\s*(
+            gem \s |
+            load \s Gem\.bin_path\( |
+            load \s Gem\.activate_bin_path\(
+          )
+          (['"])(.*?)(\2),
+        /x, 3)
     end
 
     return if spec.name == existing
 
     # somebody has written to RubyGems' directory, overwrite, too bad
-    return if Gem.default_bindir != @bin_dir and not ruby_executable
+    return if Gem.default_bindir != @bin_dir && !ruby_executable
 
-    question = "#{spec.name}'s executable \"#{filename}\" conflicts with "
+    question = "#{spec.name}'s executable \"#{filename}\" conflicts with ".dup
 
-    if ruby_executable then
-      question << existing
+    if ruby_executable
+      question << (existing || "an unknown executable")
 
       return if ask_yes_no "#{question}\nOverwrite the executable?", false
 
@@ -211,9 +288,7 @@ class Gem::Installer
   # Lazy accessor for the installer's spec.
 
   def spec
-    @spec ||= @package.spec
-  rescue Gem::Package::Error => e
-    raise Gem::InstallError, "invalid gem: #{e.message}"
+    @package.spec
   end
 
   ##
@@ -230,16 +305,21 @@ class Gem::Installer
   def install
     pre_install_checks
 
-    FileUtils.rm_f File.join gem_home, 'specifications', @spec.spec_name
-
     run_pre_install_hooks
+
+    # Set loaded_from to ensure extension_dir is correct
+    if @options[:install_as_default]
+      spec.loaded_from = default_spec_file
+    else
+      spec.loaded_from = spec_file
+    end
 
     # Completely remove any previous gem files
     FileUtils.rm_rf gem_dir
+    FileUtils.rm_rf spec.extension_dir
 
-    FileUtils.mkdir_p gem_dir
-
-    spec.loaded_from = spec_file
+    dir_mode = options[:dir_mode]
+    FileUtils.mkdir_p gem_dir, mode: dir_mode && 0o755
 
     if @options[:install_as_default]
       extract_bin
@@ -250,47 +330,51 @@ class Gem::Installer
       build_extensions
       write_build_info_file
       run_post_build_hooks
+    end
 
-      generate_bin
+    generate_bin
+    generate_plugins
+
+    unless @options[:install_as_default]
       write_spec
       write_cache_file
     end
 
-    say spec.post_install_message unless spec.post_install_message.nil?
+    File.chmod(dir_mode, gem_dir) if dir_mode
 
-    Gem::Installer.install_lock.synchronize { Gem::Specification.add_spec spec }
+    say spec.post_install_message if options[:post_install_message] && !spec.post_install_message.nil?
+
+    Gem::Specification.add_spec(spec)
+
+    load_plugin
 
     run_post_install_hooks
 
     spec
-
-  # TODO This rescue is in the wrong place. What is raising this exception?
-  # move this rescue to around the code that actually might raise it.
-  rescue Zlib::GzipFile::Error
-    raise Gem::InstallError, "gzip error installing #{gem}"
+  rescue Errno::EACCES => e
+    # Permission denied - /path/to/foo
+    raise Gem::FilePermissionError, e.message.split(" - ").last
   end
 
   def run_pre_install_hooks # :nodoc:
     Gem.pre_install_hooks.each do |hook|
-      if hook.call(self) == false then
-        location = " at #{$1}" if hook.inspect =~ /@(.*:\d+)/
+      next unless hook.call(self) == false
+      location = " at #{$1}" if hook.inspect =~ /[ @](.*:\d+)/
 
-        message = "pre-install hook#{location} failed for #{spec.full_name}"
-        raise Gem::InstallError, message
-      end
+      message = "pre-install hook#{location} failed for #{spec.full_name}"
+      raise Gem::InstallError, message
     end
   end
 
   def run_post_build_hooks # :nodoc:
     Gem.post_build_hooks.each do |hook|
-      if hook.call(self) == false then
-        FileUtils.rm_rf gem_dir
+      next unless hook.call(self) == false
+      FileUtils.rm_rf gem_dir
 
-        location = " at #{$1}" if hook.inspect =~ /@(.*:\d+)/
+      location = " at #{$1}" if hook.inspect =~ /[ @](.*:\d+)/
 
-        message = "post-build hook#{location} failed for #{spec.full_name}"
-        raise Gem::InstallError, message
-      end
+      message = "post-build hook#{location} failed for #{spec.full_name}"
+      raise Gem::InstallError, message
     end
   end
 
@@ -306,11 +390,11 @@ class Gem::Installer
   # we'll be installing into.
 
   def installed_specs
-    @specs ||= begin
+    @installed_specs ||= begin
       specs = []
 
-      Dir[File.join(gem_home, "specifications", "*.gemspec")].each do |path|
-        spec = Gem::Specification.load path.untaint
+      Gem::Util.glob_files_in_dir("*.gemspec", File.join(gem_home, "specifications")).each do |path|
+        spec = Gem::Specification.load path
         specs << spec if spec
       end
 
@@ -326,7 +410,7 @@ class Gem::Installer
   # dependency :: Gem::Dependency
 
   def ensure_dependency(spec, dependency)
-    unless installation_satisfies_dependency? dependency then
+    unless installation_satisfies_dependency? dependency
       raise Gem::InstallError, "#{spec.name} requires #{dependency}"
     end
     true
@@ -336,10 +420,10 @@ class Gem::Installer
   # True if the gems in the system satisfy +dependency+.
 
   def installation_satisfies_dependency?(dependency)
-    return true if @options[:development] and dependency.type == :development
-    return true if installed_specs.detect { |s| dependency.matches_spec? s }
+    return true if @options[:development] && dependency.type == :development
+    return true if installed_specs.detect {|s| dependency.matches_spec? s }
     return false if @only_install_dir
-    not dependency.matching_specs.empty?
+    !dependency.matching_specs.empty?
   end
 
   ##
@@ -349,9 +433,10 @@ class Gem::Installer
     @gem_dir = directory
     extract_files
   end
+  rubygems_deprecate :unpack
 
   ##
-  # The location of of the spec file that is installed.
+  # The location of the spec file that is installed.
   #
 
   def spec_file
@@ -359,11 +444,11 @@ class Gem::Installer
   end
 
   ##
-  # The location of of the default spec file for default gems.
+  # The location of the default spec file for default gems.
   #
 
   def default_spec_file
-    File.join gem_home, "specifications/default", "#{spec.full_name}.gemspec"
+    File.join gem_home, "specifications", "default", "#{spec.full_name}.gemspec"
   end
 
   ##
@@ -371,33 +456,30 @@ class Gem::Installer
   # specifications directory.
 
   def write_spec
-    open spec_file, 'w' do |file|
-      spec.installed_by_version = Gem.rubygems_version
+    spec.installed_by_version = Gem.rubygems_version
 
-      file.puts spec.to_ruby_for_cache
-
-      file.fsync rescue nil # for filesystems without fsync(2)
-    end
+    Gem.write_binary(spec_file, spec.to_ruby_for_cache)
   end
 
   ##
   # Writes the full .gemspec specification (in Ruby) to the gem home's
   # specifications/default directory.
+  #
+  # In contrast to #write_spec, this keeps file lists, so the `gem contents`
+  # command works.
 
   def write_default_spec
-    File.open(default_spec_file, "w") do |file|
-      file.puts spec.to_ruby
-    end
+    Gem.write_binary(default_spec_file, spec.to_ruby)
   end
 
   ##
   # Creates windows .bat files for easy running of commands
 
   def generate_windows_script(filename, bindir)
-    if Gem.win_platform? then
-      script_name = filename + ".bat"
+    if Gem.win_platform?
+      script_name = formatted_program_filename(filename) + ".bat"
       script_path = File.join bindir, File.basename(script_name)
-      File.open script_path, 'w' do |file|
+      File.open script_path, "w" do |file|
         file.puts windows_stub_script(bindir, filename)
       end
 
@@ -406,33 +488,45 @@ class Gem::Installer
   end
 
   def generate_bin # :nodoc:
-    return if spec.executables.nil? or spec.executables.empty?
+    return if spec.executables.nil? || spec.executables.empty?
 
-    Dir.mkdir @bin_dir unless File.exist? @bin_dir
-    raise Gem::FilePermissionError.new(@bin_dir) unless File.writable? @bin_dir
+    ensure_writable_dir @bin_dir
 
     spec.executables.each do |filename|
-      filename.untaint
       bin_path = File.join gem_dir, spec.bindir, filename
-
-      unless File.exist? bin_path then
-        # TODO change this to a more useful warning
-        warn "#{bin_path} maybe `gem pristine #{spec.name}` will fix it?"
-        next
-      end
+      next unless File.exist? bin_path
 
       mode = File.stat(bin_path).mode
-      FileUtils.chmod mode | 0111, bin_path unless (mode | 0111) == mode
+      dir_mode = options[:prog_mode] || (mode | 0o111)
+
+      unless dir_mode == mode
+        require "fileutils"
+        FileUtils.chmod dir_mode, bin_path
+      end
 
       check_executable_overwrite filename
 
-      if @wrappers then
+      if @wrappers
         generate_bin_script filename, @bin_dir
       else
         generate_bin_symlink filename, @bin_dir
       end
-
     end
+  end
+
+  def generate_plugins # :nodoc:
+    latest = Gem::Specification.latest_spec_for(spec.name)
+    return if latest && latest.version > spec.version
+
+    ensure_writable_dir @plugins_dir
+
+    if spec.plugins.empty?
+      remove_plugins_for(spec, @plugins_dir)
+    else
+      regenerate_plugins_for(spec, @plugins_dir)
+    end
+  rescue ArgumentError => e
+    raise e, "#{latest.name} #{latest.version} #{spec.name} #{spec.version}: #{e.message}"
   end
 
   ##
@@ -440,15 +534,17 @@ class Gem::Installer
   #--
   # The Windows script is generated in addition to the regular one due to a
   # bug or misfeature in the Windows shell's pipe.  See
-  # http://blade.nagaokaut.ac.jp/cgi-bin/scat.rb/ruby/ruby-talk/193379
+  # https://blade.ruby-lang.org/ruby-talk/193379
 
   def generate_bin_script(filename, bindir)
     bin_script_path = File.join bindir, formatted_program_filename(filename)
 
+    require "fileutils"
     FileUtils.rm_f bin_script_path # prior install may have been --no-wrappers
 
-    File.open bin_script_path, 'wb', 0755 do |file|
+    File.open bin_script_path, "wb", 0o755 do |file|
       file.print app_script_text(filename)
+      file.chmod(options[:prog_mode] || 0o755)
     end
 
     verbose bin_script_path
@@ -461,25 +557,22 @@ class Gem::Installer
   # the symlink if the gem being installed has a newer version.
 
   def generate_bin_symlink(filename, bindir)
-    if Gem.win_platform? then
-      alert_warning "Unable to use symlinks on Windows, installing wrapper"
-      generate_bin_script filename, bindir
-      return
-    end
-
     src = File.join gem_dir, spec.bindir, filename
     dst = File.join bindir, formatted_program_filename(filename)
 
-    if File.exist? dst then
-      if File.symlink? dst then
+    if File.exist? dst
+      if File.symlink? dst
         link = File.readlink(dst).split File::SEPARATOR
-        cur_version = Gem::Version.create(link[-3].sub(/^.*-/, ''))
+        cur_version = Gem::Version.create(link[-3].sub(/^.*-/, ""))
         return if spec.version < cur_version
       end
       File.unlink dst
     end
 
-    FileUtils.symlink src, dst, :verbose => Gem.configuration.really_verbose
+    FileUtils.symlink src, dst, verbose: Gem.configuration.really_verbose
+  rescue NotImplementedError, SystemCallError
+    alert_warning "Unable to use symlinks, installing wrapper"
+    generate_bin_script filename, bindir
   end
 
   ##
@@ -498,11 +591,10 @@ class Gem::Installer
   #
 
   def shebang(bin_file_name)
-    ruby_name = RbConfig::CONFIG['ruby_install_name'] if @env_shebang
     path = File.join gem_dir, spec.bindir, bin_file_name
-    first_line = File.open(path, "rb") {|file| file.gets}
+    first_line = File.open(path, "rb", &:gets) || ""
 
-    if /\A#!/ =~ first_line then
+    if first_line.start_with?("#!")
       # Preserve extra words on shebang line, like "-w".  Thanks RPA.
       shebang = first_line.sub(/\A\#!.*?ruby\S*((\s+\S+)+)/, "#!#{Gem.ruby}")
       opts = $1
@@ -511,7 +603,7 @@ class Gem::Installer
 
     if which = Gem.configuration[:custom_shebang]
       # replace bin_file_name with "ruby" to avoid endless loops
-      which = which.gsub(/ #{bin_file_name}$/," #{RbConfig::CONFIG['ruby_install_name']}")
+      which = which.gsub(/ #{bin_file_name}$/," #{ruby_install_name}")
 
       which = which.gsub(/\$(\w+)/) do
         case $1
@@ -527,14 +619,12 @@ class Gem::Installer
       end
 
       "#!#{which}"
-    elsif not ruby_name then
-      "#!#{Gem.ruby}#{opts}"
-    elsif opts then
-      "#!/bin/sh\n'exec' #{ruby_name.dump} '-x' \"$0\" \"$@\"\n#{shebang}"
-    else
+    elsif @env_shebang
       # Create a plain shebang line.
       @env_path ||= ENV_PATHS.find {|env_path| File.executable? env_path }
-      "#!#{@env_path} #{ruby_name}"
+      "#!#{@env_path} #{ruby_install_name}"
+    else
+      "#{bash_prolog_script}#!#{Gem.ruby}#{opts}"
     end
   end
 
@@ -544,31 +634,12 @@ class Gem::Installer
 
   def ensure_loadable_spec
     ruby = spec.to_ruby_for_cache
-    ruby.untaint
 
     begin
       eval ruby
     rescue StandardError, SyntaxError => e
       raise Gem::InstallError,
             "The specification for #{spec.full_name} is corrupt (#{e.class})"
-    end
-  end
-
-  def ensure_required_ruby_version_met # :nodoc:
-    if rrv = spec.required_ruby_version then
-      unless rrv.satisfied_by? Gem.ruby_version then
-        raise Gem::InstallError, "#{spec.name} requires Ruby version #{rrv}."
-      end
-    end
-  end
-
-  def ensure_required_rubygems_version_met # :nodoc:
-    if rrgv = spec.required_rubygems_version then
-      unless rrgv.satisfied_by? Gem.rubygems_version then
-        raise Gem::InstallError,
-          "#{spec.name} requires RubyGems version #{rrgv}. " +
-          "Try 'gem update --system' to update RubyGems itself."
-      end
     end
   end
 
@@ -583,74 +654,110 @@ class Gem::Installer
 
   def process_options # :nodoc:
     @options = {
-      :bin_dir      => nil,
-      :env_shebang  => false,
-      :force        => false,
-      :only_install_dir => false
+      bin_dir: nil,
+      env_shebang: false,
+      force: false,
+      only_install_dir: false,
+      post_install_message: true,
     }.merge options
 
     @env_shebang         = options[:env_shebang]
     @force               = options[:force]
     @install_dir         = options[:install_dir]
-    @gem_home            = options[:install_dir] || Gem.dir
+    @user_install        = options[:user_install]
     @ignore_dependencies = options[:ignore_dependencies]
     @format_executable   = options[:format_executable]
-    @security_policy     = options[:security_policy]
     @wrappers            = options[:wrappers]
     @only_install_dir    = options[:only_install_dir]
+
+    @bin_dir             = options[:bin_dir]
+    @development         = options[:development]
+    @build_root          = options[:build_root]
+
+    @build_args = options[:build_args]
+
+    @gem_home = @install_dir || user_install_dir || Gem.dir
 
     # If the user has asked for the gem to be installed in a directory that is
     # the system gem directory, then use the system bin directory, else create
     # (or use) a new bin dir under the gem_home.
-    @bin_dir             = options[:bin_dir] || Gem.bindir(gem_home)
-    @development         = options[:development]
-    @build_root          = options[:build_root]
+    @bin_dir ||= Gem.bindir(@gem_home)
 
-    @build_args          = options[:build_args] || Gem::Command.build_args
+    @plugins_dir = Gem.plugindir(@gem_home)
 
     unless @build_root.nil?
-      require 'pathname'
-      @build_root = Pathname.new(@build_root).expand_path
-      @bin_dir = File.join(@build_root, options[:bin_dir] || Gem.bindir(@gem_home))
-      @gem_home = File.join(@build_root, @gem_home)
-      alert_warning "You build with buildroot.\n  Build root: #{@build_root}\n  Bin dir: #{@bin_dir}\n  Gem home: #{@gem_home}"
+      @bin_dir = File.join(@build_root, @bin_dir.gsub(/^[a-zA-Z]:/, ""))
+      @gem_home = File.join(@build_root, @gem_home.gsub(/^[a-zA-Z]:/, ""))
+      @plugins_dir = File.join(@build_root, @plugins_dir.gsub(/^[a-zA-Z]:/, ""))
+      alert_warning "You build with buildroot.\n  Build root: #{@build_root}\n  Bin dir: #{@bin_dir}\n  Gem home: #{@gem_home}\n  Plugins dir: #{@plugins_dir}"
     end
   end
 
   def check_that_user_bin_dir_is_in_path # :nodoc:
-    user_bin_dir = @bin_dir || Gem.bindir(gem_home)
-    user_bin_dir = user_bin_dir.gsub(File::SEPARATOR, File::ALT_SEPARATOR) if
-      File::ALT_SEPARATOR
+    return if self.class.path_warning
 
-    path = ENV['PATH']
-    if Gem.win_platform? then
+    user_bin_dir = @bin_dir || Gem.bindir(gem_home)
+    user_bin_dir = user_bin_dir.tr(File::ALT_SEPARATOR, File::SEPARATOR) if File::ALT_SEPARATOR
+
+    path = ENV["PATH"]
+    path = path.tr(File::ALT_SEPARATOR, File::SEPARATOR) if File::ALT_SEPARATOR
+
+    if Gem.win_platform?
       path = path.downcase
       user_bin_dir = user_bin_dir.downcase
     end
 
     path = path.split(File::PATH_SEPARATOR)
 
-    unless path.include? user_bin_dir then
-      unless !Gem.win_platform? && (path.include? user_bin_dir.sub(ENV['HOME'], '~'))
-        unless self.class.path_warning then
-          alert_warning "You don't have #{user_bin_dir} in your PATH,\n\t  gem executables will not run."
-          self.class.path_warning = true
-        end
+    unless path.include? user_bin_dir
+      unless !Gem.win_platform? && (path.include? user_bin_dir.sub(ENV["HOME"], "~"))
+        alert_warning "You don't have #{user_bin_dir} in your PATH,\n\t  gem executables will not run."
+        self.class.path_warning = true
       end
     end
   end
 
-  def verify_gem_home(unpack = false) # :nodoc:
-    FileUtils.mkdir_p gem_home
-    raise Gem::FilePermissionError, gem_home unless
-      unpack or File.writable?(gem_home)
+  def verify_gem_home # :nodoc:
+    FileUtils.mkdir_p gem_home, mode: options[:dir_mode] && 0o755
+  end
+
+  def verify_spec
+    unless Gem::Specification::VALID_NAME_PATTERN.match?(spec.name)
+      raise Gem::InstallError, "#{spec} has an invalid name"
+    end
+
+    if spec.raw_require_paths.any? {|path| path =~ /\R/ }
+      raise Gem::InstallError, "#{spec} has an invalid require_paths"
+    end
+
+    if spec.extensions.any? {|ext| ext =~ /\R/ }
+      raise Gem::InstallError, "#{spec} has an invalid extensions"
+    end
+
+    if /\R/.match?(spec.platform.to_s)
+      raise Gem::InstallError, "#{spec.platform} is an invalid platform"
+    end
+
+    unless /\A\d+\z/.match?(spec.specification_version.to_s)
+      raise Gem::InstallError, "#{spec} has an invalid specification_version"
+    end
+
+    if spec.dependencies.any? {|dep| dep.type != :runtime && dep.type != :development }
+      raise Gem::InstallError, "#{spec} has an invalid dependencies"
+    end
+
+    if spec.dependencies.any? {|dep| dep.name =~ /(?:\R|[<>])/ }
+      raise Gem::InstallError, "#{spec} has an invalid dependencies"
+    end
   end
 
   ##
   # Return the text for an application file.
 
   def app_script_text(bin_file_name)
-    return <<-TEXT
+    # NOTE: that the `load` lines cannot be indented, as old RG versions match
+    # against the beginning of the line
+    <<-TEXT
 #{shebang bin_file_name}
 #
 # This file was generated by RubyGems.
@@ -660,20 +767,43 @@ class Gem::Installer
 #
 
 require 'rubygems'
+#{gemdeps_load(spec.name)}
+version = "#{Gem::Requirement.default_prerelease}"
 
-version = "#{Gem::Requirement.default}"
-
-if ARGV.first
-  str = ARGV.first
-  str = str.dup.force_encoding("BINARY") if str.respond_to? :force_encoding
-  if str =~ /\\A_(.*)_\\z/ and Gem::Version.correct?($1) then
-    version = $1
+str = ARGV.first
+if str
+  str = str.b[/\\A_(.*)_\\z/, 1]
+  if str and Gem::Version.correct?(str)
+    #{explicit_version_requirement(spec.name)}
     ARGV.shift
   end
 end
 
-gem '#{spec.name}', version
-load Gem.bin_path('#{spec.name}', '#{bin_file_name}', version)
+if Gem.respond_to?(:activate_bin_path)
+load Gem.activate_bin_path('#{spec.name}', '#{bin_file_name}', version)
+else
+gem #{spec.name.dump}, version
+load Gem.bin_path(#{spec.name.dump}, #{bin_file_name.dump}, version)
+end
+TEXT
+  end
+
+  def gemdeps_load(name)
+    return "" if name == "bundler"
+
+    <<-TEXT
+
+Gem.use_gemdeps
+TEXT
+  end
+
+  def explicit_version_requirement(name)
+    code = "version = str"
+    return code unless name == "bundler"
+
+    code += <<-TEXT
+
+    ENV['BUNDLER_VERSION'] = str
 TEXT
   end
 
@@ -681,36 +811,45 @@ TEXT
   # return the stub script text used to launch the true Ruby script
 
   def windows_stub_script(bindir, bin_file_name)
-    ruby = Gem.ruby.gsub(/^\"|\"$/, "").tr(File::SEPARATOR, "\\")
-    return <<-TEXT
-@ECHO OFF
-IF NOT "%~f0" == "~f0" GOTO :WinNT
-@"#{ruby}" "#{File.join(bindir, bin_file_name)}" %1 %2 %3 %4 %5 %6 %7 %8 %9
-GOTO :EOF
-:WinNT
-@"#{ruby}" "%~dpn0" %*
-TEXT
-  end
+    rb_topdir = RbConfig::TOPDIR || File.dirname(rb_config["bindir"])
 
+    # get ruby executable file name from RbConfig
+    ruby_exe = "#{rb_config["RUBY_INSTALL_NAME"]}#{rb_config["EXEEXT"]}"
+    ruby_exe = "ruby.exe" if ruby_exe.empty?
+
+    if File.exist?(File.join(bindir, ruby_exe))
+      # stub & ruby.exe within same folder.  Portable
+      <<-TEXT
+@ECHO OFF
+@"%~dp0#{ruby_exe}" "%~dpn0" %*
+      TEXT
+    elsif bindir.downcase.start_with? rb_topdir.downcase
+      # stub within ruby folder, but not standard bin.  Portable
+      require "pathname"
+      from = Pathname.new bindir
+      to   = Pathname.new "#{rb_topdir}/bin"
+      rel  = to.relative_path_from from
+      <<-TEXT
+@ECHO OFF
+@"%~dp0#{rel}/#{ruby_exe}" "%~dpn0" %*
+      TEXT
+    else
+      # outside ruby folder, maybe -user-install or bundler.  Portable, but ruby
+      # is dependent on PATH
+      <<-TEXT
+@ECHO OFF
+@#{ruby_exe} "%~dpn0" %*
+      TEXT
+    end
+  end
   ##
   # Builds extensions.  Valid types of extensions are extconf.rb files,
   # configure scripts and rakefiles or mkrf_conf files.
 
   def build_extensions
-    builder = Gem::Ext::Builder.new spec, @build_args
+    builder = Gem::Ext::Builder.new spec, build_args
 
     builder.build_extensions
-  end
-
-  ##
-  # Logs the build +output+ in +build_dir+, then raises Gem::Ext::BuildError.
-  #
-  # TODO:  Delete this for RubyGems 3.  It remains for API compatibility
-
-  def extension_build_error(build_dir, output, backtrace = nil) # :nodoc:
-    builder = Gem::Ext::Builder.new spec, @build_args
-
-    builder.build_error build_dir, output, backtrace
   end
 
   ##
@@ -728,14 +867,14 @@ TEXT
   # without the full gem installed.
 
   def extract_bin
-    @package.extract_files gem_dir, "bin/*"
+    @package.extract_files gem_dir, "#{spec.bindir}/*"
   end
 
   ##
   # Prefix and suffix the program filename the same as ruby.
 
   def formatted_program_filename(filename)
-    if @format_executable then
+    if @format_executable
       self.class.exec_format % File.basename(filename)
     else
       filename
@@ -753,21 +892,27 @@ TEXT
   end
 
   ##
+  # Filename of the gem being installed.
+
+  def gem
+    @package.gem.path
+  end
+
+  ##
   # Performs various checks before installing the gem such as the install
   # repository is writable and its directories exist, required Ruby and
   # rubygems versions are met and that dependencies are installed.
   #
   # Version and dependency checks are skipped if this install is forced.
   #
-  # The dependent check will be skipped this install is ignoring dependencies.
+  # The dependent check will be skipped if the install is ignoring dependencies.
 
   def pre_install_checks
-    verify_gem_home options[:unpack]
+    verify_gem_home
 
-    # If we're forcing the install then disable security unless the security
-    # policy says that we only install signed gems.
-    @security_policy = nil if
-      @force and @security_policy and not @security_policy.only_signed
+    # The name and require_paths must be verified first, since it could contain
+    # ruby code that would be eval'ed in #ensure_loadable_spec
+    verify_spec
 
     ensure_loadable_spec
 
@@ -779,8 +924,6 @@ TEXT
 
     return true if @force
 
-    ensure_required_ruby_version_met
-    ensure_required_rubygems_version_met
     ensure_dependencies_met unless @ignore_dependencies
 
     true
@@ -791,29 +934,107 @@ TEXT
   # extensions.
 
   def write_build_info_file
-    return if @build_args.empty?
+    return if build_args.empty?
 
-    build_info_dir = File.join gem_home, 'build_info'
+    build_info_dir = File.join gem_home, "build_info"
 
-    FileUtils.mkdir_p build_info_dir
+    dir_mode = options[:dir_mode]
+    FileUtils.mkdir_p build_info_dir, mode: dir_mode && 0o755
 
     build_info_file = File.join build_info_dir, "#{spec.full_name}.info"
 
-    open build_info_file, 'w' do |io|
-      @build_args.each do |arg|
+    File.open build_info_file, "w" do |io|
+      build_args.each do |arg|
         io.puts arg
       end
     end
+
+    File.chmod(dir_mode, build_info_dir) if dir_mode
   end
 
   ##
   # Writes the .gem file to the cache directory
 
   def write_cache_file
-    cache_file = File.join gem_home, 'cache', spec.file_name
-
-    FileUtils.cp @gem, cache_file unless File.exist? cache_file
+    cache_file = File.join gem_home, "cache", spec.file_name
+    @package.copy_to cache_file
   end
 
-end
+  def ensure_writable_dir(dir) # :nodoc:
+    begin
+      Dir.mkdir dir, *[options[:dir_mode] && 0o755].compact
+    rescue SystemCallError
+      raise unless File.directory? dir
+    end
 
+    raise Gem::FilePermissionError.new(dir) unless File.writable? dir
+  end
+
+  private
+
+  def user_install_dir
+    # never install to user home in --build-root mode
+    return unless @build_root.nil?
+
+    # Please note that @user_install might have three states:
+    # * `true`: `--user-install`
+    # * `false`: `--no-user-install` and
+    # * `nil`: option was not specified
+    if @user_install || (@user_install.nil? && Gem.default_user_install)
+      Gem.user_dir
+    end
+  end
+
+  def build_args
+    @build_args ||= begin
+                      require_relative "command"
+                      Gem::Command.build_args
+                    end
+  end
+
+  def rb_config
+    RbConfig::CONFIG
+  end
+
+  def ruby_install_name
+    rb_config["ruby_install_name"]
+  end
+
+  def load_relative_enabled?
+    rb_config["LIBRUBY_RELATIVE"] == "yes"
+  end
+
+  def bash_prolog_script
+    if load_relative_enabled?
+      script = +<<~EOS
+        bindir="${0%/*}"
+      EOS
+
+      script << %(exec "$bindir/#{ruby_install_name}" "-x" "$0" "$@"\n)
+
+      <<~EOS
+        #!/bin/sh
+        # -*- ruby -*-
+        _=_\\
+        =begin
+        #{script.chomp}
+        =end
+      EOS
+    else
+      ""
+    end
+  end
+
+  def load_plugin
+    specs = Gem::Specification.find_all_by_name(spec.name)
+    # If old version already exists, this plugin isn't loaded
+    # immediately. It's for avoiding a case that multiple versions
+    # are loaded at the same time.
+    return unless specs.size == 1
+
+    plugin_files = spec.plugins.map do |plugin|
+      File.join(@plugins_dir, "#{spec.name}_plugin#{File.extname(plugin)}")
+    end
+    Gem.load_plugin_files(plugin_files)
+  end
+end

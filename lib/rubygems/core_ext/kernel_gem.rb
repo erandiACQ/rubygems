@@ -1,14 +1,6 @@
-##
-# RubyGems adds the #gem method to allow activation of specific gem versions
-# and overrides the #require method on Kernel to make gems appear as if they
-# live on the <code>$LOAD_PATH</code>.  See the documentation of these methods
-# for further detail.
+# frozen_string_literal: true
 
 module Kernel
-
-  # REFACTOR: This should be pulled out into some kind of hacks file.
-  remove_method :gem if 'method' == defined? gem # from gem_prelude.rb on 1.9
-
   ##
   # Use Kernel#gem to activate a specific version of +gem_name+.
   #
@@ -41,12 +33,12 @@ module Kernel
   #   GEM_SKIP=libA:libB ruby -I../libA -I../libB ./mycode.rb
 
   def gem(gem_name, *requirements) # :doc:
-    skip_list = (ENV['GEM_SKIP'] || "").split(/:/)
+    skip_list = (ENV["GEM_SKIP"] || "").split(/:/)
     raise Gem::LoadError, "skipping #{gem_name}" if skip_list.include? gem_name
 
-    if gem_name.kind_of? Gem::Dependency
+    if gem_name.is_a? Gem::Dependency
       unless Gem::Deprecate.skip
-        warn "#{Gem.location_of_caller.join ':'}:Warning: Kernel.gem no longer "\
+        warn "#{Gem.location_of_caller.join ":"}:Warning: Kernel.gem no longer "\
           "accepts a Gem::Dependency object, please pass the name "\
           "and requirements directly"
       end
@@ -63,11 +55,14 @@ module Kernel
 
     spec = dep.to_spec
 
-    Gem::LOADED_SPECS_MUTEX.synchronize {
-      spec.activate
-    } if spec
+    if spec
+      if Gem::LOADED_SPECS_MUTEX.owned?
+        spec.activate
+      else
+        Gem::LOADED_SPECS_MUTEX.synchronize { spec.activate }
+      end
+    end
   end
 
   private :gem
-
 end

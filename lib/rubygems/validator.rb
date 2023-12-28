@@ -1,44 +1,22 @@
+# frozen_string_literal: true
+
 #--
 # Copyright 2006 by Chad Fowler, Rich Kilmer, Jim Weirich and others.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #++
 
-require 'rubygems/package'
-require 'rubygems/installer'
+require_relative "package"
+require_relative "installer"
 
 ##
 # Validator performs various gem file and gem database validation
 
 class Gem::Validator
-
   include Gem::UserInteraction
 
   def initialize # :nodoc:
-    require 'find'
-  end
-
-  ##
-  # Given a gem file's contents, validates against its own MD5 checksum
-  # gem_data:: [String] Contents of the gem file
-
-  def verify_gem(gem_data)
-    # TODO remove me? The code here only validate an MD5SUM that was
-    # in some old formatted gems, but hasn't been for a long time.
-  end
-
-  ##
-  # Given the path to a gem file, validates against its own MD5 checksum
-  #
-  # gem_path:: [String] Path to gem file
-
-  def verify_gem_file(gem_path)
-    open gem_path, Gem.binary_mode do |file|
-      gem_data = file.read
-      verify_gem gem_data
-    end
-  rescue Errno::ENOENT, Errno::EINVAL
-    raise Gem::VerificationError, "missing gem file #{gem_path}"
+    require "find"
   end
 
   private
@@ -47,9 +25,9 @@ class Gem::Validator
     installed_files = []
 
     Find.find gem_directory do |file_name|
-      fn = file_name[gem_directory.size..file_name.size-1].sub(/^\//, "")
+      fn = file_name[gem_directory.size..file_name.size - 1].sub(%r{^/}, "")
       installed_files << fn unless
-        fn =~ /CVS/ || fn.empty? || File.directory?(file_name)
+        fn.empty? || fn.include?("CVS") || File.directory?(file_name)
     end
 
     installed_files
@@ -61,7 +39,7 @@ class Gem::Validator
   # Describes a problem with a file in a gem.
 
   ErrorData = Struct.new :path, :problem do
-    def <=> other # :nodoc:
+    def <=>(other) # :nodoc:
       return nil unless self.class === other
 
       [path, problem] <=> [other.path, other.problem]
@@ -82,10 +60,12 @@ class Gem::Validator
   # TODO needs further cleanup
 
   def alien(gems=[])
-    errors = Hash.new { |h,k| h[k] = {} }
+    errors = Hash.new {|h,k| h[k] = {} }
 
     Gem::Specification.each do |spec|
-      next unless gems.include? spec.name unless gems.empty?
+      unless gems.empty?
+        next unless gems.include? spec.name
+      end
       next if spec.default_gem?
 
       gem_name      = spec.file_name
@@ -93,50 +73,50 @@ class Gem::Validator
       spec_path     = spec.spec_file
       gem_directory = spec.full_gem_path
 
-      unless File.directory? gem_directory then
+      unless File.directory? gem_directory
         errors[gem_name][spec.full_name] =
           "Gem registered but doesn't exist at #{gem_directory}"
         next
       end
 
-      unless File.exist? spec_path then
+      unless File.exist? spec_path
         errors[gem_name][spec_path] = "Spec file missing for installed gem"
       end
 
       begin
-        verify_gem_file(gem_path)
+        unless File.readable?(gem_path)
+          raise Gem::VerificationError, "missing gem file #{gem_path}"
+        end
 
         good, gone, unreadable = nil, nil, nil, nil
 
-        open gem_path, Gem.binary_mode do |file|
+        File.open gem_path, Gem.binary_mode do |_file|
           package = Gem::Package.new gem_path
 
-          good, gone = package.contents.partition { |file_name|
+          good, gone = package.contents.partition do |file_name|
             File.exist? File.join(gem_directory, file_name)
-          }
+          end
 
           gone.sort.each do |path|
             errors[gem_name][path] = "Missing file"
           end
 
-          good, unreadable = good.partition { |file_name|
+          good, unreadable = good.partition do |file_name|
             File.readable? File.join(gem_directory, file_name)
-          }
+          end
 
           unreadable.sort.each do |path|
             errors[gem_name][path] = "Unreadable file"
           end
 
           good.each do |entry, data|
-            begin
-              next unless data # HACK `gem check -a mkrf`
+            next unless data # HACK: `gem check -a mkrf`
 
-              source = File.join gem_directory, entry['path']
+            source = File.join gem_directory, entry["path"]
 
-              open source, Gem.binary_mode do |f|
-                unless f.read == data then
-                  errors[gem_name][entry['path']] = "Modified from original"
-                end
+            File.open source, Gem.binary_mode do |f|
+              unless f.read == data
+                errors[gem_name][entry["path"]] = "Modified from original"
               end
             end
           end
@@ -162,4 +142,3 @@ class Gem::Validator
     errors
   end
 end
-

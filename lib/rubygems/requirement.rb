@@ -1,9 +1,6 @@
-require "rubygems/version"
-require "rubygems/deprecate"
+# frozen_string_literal: true
 
-# If we're being loaded after yaml was already required, then
-# load our yaml + workarounds now.
-Gem.load_yaml if defined? ::YAML
+require_relative "version"
 
 ##
 # A Requirement is a set of one or more version restrictions. It supports a
@@ -13,20 +10,20 @@ Gem.load_yaml if defined? ::YAML
 # together in RubyGems.
 
 class Gem::Requirement
-  OPS = { #:nodoc:
-    "="  =>  lambda { |v, r| v == r },
-    "!=" =>  lambda { |v, r| v != r },
-    ">"  =>  lambda { |v, r| v >  r },
-    "<"  =>  lambda { |v, r| v <  r },
-    ">=" =>  lambda { |v, r| v >= r },
-    "<=" =>  lambda { |v, r| v <= r },
-    "~>" =>  lambda { |v, r| v >= r && v.release < r.bump }
-  }
+  OPS = { # :nodoc:
+    "=" => lambda {|v, r| v == r },
+    "!=" => lambda {|v, r| v != r },
+    ">" => lambda {|v, r| v >  r },
+    "<" => lambda {|v, r| v <  r },
+    ">=" => lambda {|v, r| v >= r },
+    "<=" => lambda {|v, r| v <= r },
+    "~>" => lambda {|v, r| v >= r && v.release < r.bump },
+  }.freeze
 
   SOURCE_SET_REQUIREMENT = Struct.new(:for_lockfile).new "!" # :nodoc:
 
-  quoted  = OPS.keys.map { |k| Regexp.quote k }.join "|"
-  PATTERN_RAW = "\\s*(#{quoted})?\\s*(#{Gem::Version::VERSION_PATTERN})\\s*" # :nodoc:
+  quoted = OPS.keys.map {|k| Regexp.quote k }.join "|"
+  PATTERN_RAW = "\\s*(#{quoted})?\\s*(#{Gem::Version::VERSION_PATTERN})\\s*".freeze # :nodoc:
 
   ##
   # A regular expression that matches a requirement
@@ -34,9 +31,14 @@ class Gem::Requirement
   PATTERN = /\A#{PATTERN_RAW}\z/
 
   ##
+  # The default requirement matches any non-prerelease version
+
+  DefaultRequirement = [">=", Gem::Version.new(0)].freeze
+
+  ##
   # The default requirement matches any version
 
-  DefaultRequirement = [">=", Gem::Version.new(0)]
+  DefaultPrereleaseRequirement = [">=", Gem::Version.new("0.a")].freeze
 
   ##
   # Raised when a bad requirement is encountered
@@ -50,16 +52,20 @@ class Gem::Requirement
   # If the input is "weird", the default version requirement is
   # returned.
 
-  def self.create input
+  def self.create(*inputs)
+    return new inputs if inputs.length > 1
+
+    input = inputs.shift
+
     case input
     when Gem::Requirement then
       input
     when Gem::Version, Array then
       new input
-    when '!' then
+    when "!" then
       source_set
     else
-      if input.respond_to? :to_str then
+      if input.respond_to? :to_str
         new [input.to_str]
       else
         default
@@ -67,11 +73,12 @@ class Gem::Requirement
     end
   end
 
-  ##
-  # A default "version requirement" can surely _only_ be '>= 0'.
-
   def self.default
-    new '>= 0'
+    new ">= 0"
+  end
+
+  def self.default_prerelease
+    new ">= 0.a"
   end
 
   ###
@@ -89,11 +96,11 @@ class Gem::Requirement
   # specification, like <tt>">= 1.2"</tt>, or a simple version number,
   # like <tt>"1.2"</tt>.
   #
-  #     parse("> 1.0")                 # => [">", "1.0"]
-  #     parse("1.0")                   # => ["=", "1.0"]
-  #     parse(Gem::Version.new("1.0")) # => ["=,  "1.0"]
+  #     parse("> 1.0")                 # => [">", Gem::Version.new("1.0")]
+  #     parse("1.0")                   # => ["=", Gem::Version.new("1.0")]
+  #     parse(Gem::Version.new("1.0")) # => ["=,  Gem::Version.new("1.0")]
 
-  def self.parse obj
+  def self.parse(obj)
     return ["=", obj] if Gem::Version === obj
 
     unless PATTERN =~ obj.to_s
@@ -102,8 +109,10 @@ class Gem::Requirement
 
     if $1 == ">=" && $2 == "0"
       DefaultRequirement
+    elsif $1 == ">=" && $2 == "0.a"
+      DefaultPrereleaseRequirement
     else
-      [$1 || "=", Gem::Version.new($2)]
+      [-($1 || "="), Gem::Version.new($2)]
     end
   end
 
@@ -111,7 +120,7 @@ class Gem::Requirement
   # An array of requirement pairs. The first element of the pair is
   # the op, and the second is the Gem::Version.
 
-  attr_reader :requirements #:nodoc:
+  attr_reader :requirements # :nodoc:
 
   ##
   # Constructs a requirement from +requirements+. Requirements can be
@@ -119,7 +128,7 @@ class Gem::Requirement
   # requirements are ignored. An empty set of +requirements+ is the
   # same as <tt>">= 0"</tt>.
 
-  def initialize *requirements
+  def initialize(*requirements)
     requirements = requirements.flatten
     requirements.compact!
     requirements.uniq!
@@ -127,18 +136,18 @@ class Gem::Requirement
     if requirements.empty?
       @requirements = [DefaultRequirement]
     else
-      @requirements = requirements.map! { |r| self.class.parse r }
+      @requirements = requirements.map! {|r| self.class.parse r }
     end
   end
 
   ##
   # Concatenates the +new+ requirements onto this requirement.
 
-  def concat new
+  def concat(new)
     new = new.flatten
     new.compact!
     new.uniq!
-    new = new.map { |r| self.class.parse r }
+    new = new.map {|r| self.class.parse r }
 
     @requirements.concat new
   end
@@ -147,15 +156,15 @@ class Gem::Requirement
   # Formats this requirement for use in a Gem::RequestSet::Lockfile.
 
   def for_lockfile # :nodoc:
-    return if [DefaultRequirement] == @requirements
+    return if @requirements == [DefaultRequirement]
 
-    list = requirements.sort_by { |_, version|
+    list = requirements.sort_by do |_, version|
       version
-    }.map { |op, version|
+    end.map do |op, version|
       "#{op} #{version}"
-    }.uniq
+    end.uniq
 
-    " (#{list.join ', '})"
+    " (#{list.join ", "})"
   end
 
   ##
@@ -178,35 +187,30 @@ class Gem::Requirement
   end
 
   def as_list # :nodoc:
-    requirements.map { |op, version| "#{op} #{version}" }.sort
+    requirements.map {|op, version| "#{op} #{version}" }
   end
 
   def hash # :nodoc:
-    requirements.sort.hash
+    requirements.map {|r| r.first == "~>" ? [r[0], r[1].to_s] : r }.sort.hash
   end
 
   def marshal_dump # :nodoc:
-    fix_syck_default_key_in_requirements
-
     [@requirements]
   end
 
-  def marshal_load array # :nodoc:
+  def marshal_load(array) # :nodoc:
     @requirements = array[0]
 
-    fix_syck_default_key_in_requirements
+    raise TypeError, "wrong @requirements" unless Array === @requirements
   end
 
   def yaml_initialize(tag, vals) # :nodoc:
     vals.each do |ivar, val|
       instance_variable_set "@#{ivar}", val
     end
-
-    Gem.load_yaml
-    fix_syck_default_key_in_requirements
   end
 
-  def init_with coder # :nodoc:
+  def init_with(coder) # :nodoc:
     yaml_initialize coder.tag, coder.map
   end
 
@@ -214,8 +218,8 @@ class Gem::Requirement
     ["@requirements"]
   end
 
-  def encode_with coder # :nodoc:
-    coder.add 'requirements', @requirements
+  def encode_with(coder) # :nodoc:
+    coder.add "requirements", @requirements
   end
 
   ##
@@ -223,11 +227,11 @@ class Gem::Requirement
   # are prereleases
 
   def prerelease?
-    requirements.any? { |r| r.last.prerelease? }
+    requirements.any? {|r| r.last.prerelease? }
   end
 
-  def pretty_print q # :nodoc:
-    q.group 1, 'Gem::Requirement.new(', ')' do
+  def pretty_print(q) # :nodoc:
+    q.group 1, "Gem::Requirement.new(", ")" do
       q.pp as_list
     end
   end
@@ -235,15 +239,14 @@ class Gem::Requirement
   ##
   # True if +version+ satisfies this Requirement.
 
-  def satisfied_by? version
+  def satisfied_by?(version)
     raise ArgumentError, "Need a Gem::Version: #{version.inspect}" unless
       Gem::Version === version
-    # #28965: syck has a bug with unquoted '=' YAML.loading as YAML::DefaultKey
-    requirements.all? { |op, rv| (OPS[op] || OPS["="]).call version, rv }
+    requirements.all? {|op, rv| OPS[op].call version, rv }
   end
 
-  alias :=== :satisfied_by?
-  alias :=~ :satisfied_by?
+  alias_method :===, :satisfied_by?
+  alias_method :=~, :satisfied_by?
 
   ##
   # True if the requirement will not always match the latest version.
@@ -251,28 +254,35 @@ class Gem::Requirement
   def specific?
     return true if @requirements.length > 1 # GIGO, > 1, > 2 is silly
 
-    not %w[> >=].include? @requirements.first.first # grab the operator
+    !%w[> >=].include? @requirements.first.first # grab the operator
   end
 
   def to_s # :nodoc:
     as_list.join ", "
   end
 
-  def == other # :nodoc:
-    Gem::Requirement === other and to_s == other.to_s
+  def ==(other) # :nodoc:
+    return unless Gem::Requirement === other
+
+    # An == check is always necessary
+    return false unless _sorted_requirements == other._sorted_requirements
+
+    # An == check is sufficient unless any requirements use ~>
+    return true unless _tilde_requirements.any?
+
+    # If any requirements use ~> we use the stricter `#eql?` that also checks
+    # that version precision is the same
+    _tilde_requirements.eql?(other._tilde_requirements)
   end
 
-  private
+  protected
 
-  def fix_syck_default_key_in_requirements # :nodoc:
-    Gem.load_yaml
+  def _sorted_requirements
+    @_sorted_requirements ||= requirements.sort_by(&:to_s)
+  end
 
-    # Fixup the Syck DefaultKey bug
-    @requirements.each do |r|
-      if r[0].kind_of? Gem::SyckDefaultKey
-        r[0] = "="
-      end
-    end
+  def _tilde_requirements
+    @_tilde_requirements ||= _sorted_requirements.select {|r| r.first == "~>" }
   end
 end
 

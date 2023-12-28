@@ -1,8 +1,10 @@
+# frozen_string_literal: true
+
 module Gem
   DEFAULT_HOST = "https://rubygems.org"
 
-  @post_install_hooks   ||= []
-  @done_installing_hooks  ||= []
+  @post_install_hooks ||= []
+  @done_installing_hooks ||= []
   @post_uninstall_hooks ||= []
   @pre_uninstall_hooks  ||= []
   @pre_install_hooks    ||= []
@@ -19,7 +21,13 @@ module Gem
   # specified in the environment
 
   def self.default_spec_cache_dir
-    File.join Gem.user_home, '.gem', 'specs'
+    default_spec_cache_dir = File.join Gem.user_home, ".gem", "specs"
+
+    unless File.exist?(default_spec_cache_dir)
+      default_spec_cache_dir = File.join Gem.data_home, "gem", "specs"
+    end
+
+    default_spec_cache_dir
   end
 
   ##
@@ -27,28 +35,7 @@ module Gem
   # specified in the environment
 
   def self.default_dir
-    path = if defined? RUBY_FRAMEWORK_VERSION then
-             [
-               File.dirname(RbConfig::CONFIG['sitedir']),
-               'Gems',
-               RbConfig::CONFIG['ruby_version']
-             ]
-           elsif RbConfig::CONFIG['rubylibprefix'] then
-             [
-              RbConfig::CONFIG['rubylibprefix'],
-              'gems',
-              RbConfig::CONFIG['ruby_version']
-             ]
-           else
-             [
-               RbConfig::CONFIG['libdir'],
-               ruby_engine,
-               'gems',
-               RbConfig::CONFIG['ruby_version']
-             ]
-           end
-
-    @default_dir ||= File.join(*path)
+    @default_dir ||= File.join(RbConfig::CONFIG["rubylibprefix"], "gems", RbConfig::CONFIG["ruby_version"])
   end
 
   ##
@@ -58,7 +45,7 @@ module Gem
   # By default, the binary extensions are located side by side with their
   # Ruby counterparts, therefore nil is returned
 
-  def self.default_ext_dir_for base_dir
+  def self.default_ext_dir_for(base_dir)
     nil
   end
 
@@ -70,12 +57,109 @@ module Gem
   end
 
   ##
+  # Path to specification files of default gems.
+
+  def self.default_specifications_dir
+    @default_specifications_dir ||= File.join(Gem.default_dir, "specifications", "default")
+  end
+
+  ##
+  # Finds the user's home directory.
+  #--
+  # Some comments from the ruby-talk list regarding finding the home
+  # directory:
+  #
+  #   I have HOME, USERPROFILE and HOMEDRIVE + HOMEPATH. Ruby seems
+  #   to be depending on HOME in those code samples. I propose that
+  #   it should fallback to USERPROFILE and HOMEDRIVE + HOMEPATH (at
+  #   least on Win32).
+  #++
+  #--
+  #
+  #++
+
+  def self.find_home
+    Dir.home.dup
+  rescue StandardError
+    if Gem.win_platform?
+      File.expand_path File.join(ENV["HOMEDRIVE"] || ENV["SystemDrive"], "/")
+    else
+      File.expand_path "/"
+    end
+  end
+
+  private_class_method :find_home
+
+  ##
+  # The home directory for the user.
+
+  def self.user_home
+    @user_home ||= find_home
+  end
+
+  ##
   # Path for gems in the user's home directory
 
   def self.user_dir
-    parts = [Gem.user_home, '.gem', ruby_engine]
-    parts << RbConfig::CONFIG['ruby_version'] unless RbConfig::CONFIG['ruby_version'].empty?
+    gem_dir = File.join(Gem.user_home, ".gem")
+    gem_dir = File.join(Gem.data_home, "gem") unless File.exist?(gem_dir)
+    parts = [gem_dir, ruby_engine]
+    parts << RbConfig::CONFIG["ruby_version"] unless RbConfig::CONFIG["ruby_version"].empty?
     File.join parts
+  end
+
+  ##
+  # The path to standard location of the user's configuration directory.
+
+  def self.config_home
+    @config_home ||= (ENV["XDG_CONFIG_HOME"] || File.join(Gem.user_home, ".config"))
+  end
+
+  ##
+  # Finds the user's config file
+
+  def self.find_config_file
+    gemrc = File.join Gem.user_home, ".gemrc"
+    if File.exist? gemrc
+      gemrc
+    else
+      File.join Gem.config_home, "gem", "gemrc"
+    end
+  end
+
+  ##
+  # The path to standard location of the user's .gemrc file.
+
+  def self.config_file
+    @config_file ||= find_config_file
+  end
+
+  ##
+  # The path to standard location of the user's state file.
+
+  def self.state_file
+    @state_file ||= File.join(Gem.state_home, "gem", "last_update_check")
+  end
+
+  ##
+  # The path to standard location of the user's cache directory.
+
+  def self.cache_home
+    @cache_home ||= (ENV["XDG_CACHE_HOME"] || File.join(Gem.user_home, ".cache"))
+  end
+
+  ##
+  # The path to standard location of the user's data directory.
+
+  def self.data_home
+    @data_home ||= (ENV["XDG_DATA_HOME"] || File.join(Gem.user_home, ".local", "share"))
+  end
+
+  ##
+  # The path to standard location of the user's state directory.
+
+  def self.state_home
+    @state_home ||= (ENV["XDG_STATE_HOME"] || File.join(Gem.user_home, ".local", "state"))
   end
 
   ##
@@ -92,7 +176,7 @@ module Gem
     path = []
     path << user_dir if user_home && File.exist?(user_home)
     path << default_dir
-    path << vendor_dir if vendor_dir and File.directory? vendor_dir
+    path << vendor_dir if vendor_dir && File.directory?(vendor_dir)
     path
   end
 
@@ -100,9 +184,13 @@ module Gem
   # Deduce Ruby's --program-prefix and --program-suffix from its install name
 
   def self.default_exec_format
-    exec_format = RbConfig::CONFIG['ruby_install_name'].sub('ruby', '%s') rescue '%s'
+    exec_format = begin
+                    RbConfig::CONFIG["ruby_install_name"].sub("ruby", "%s")
+                  rescue StandardError
+                    "%s"
+                  end
 
-    unless exec_format =~ /%s/ then
+    unless exec_format.include?("%s")
       raise Gem::Exception,
         "[BUG] invalid exec_format #{exec_format.inspect}, no %s"
     end
@@ -114,43 +202,49 @@ module Gem
   # The default directory for binaries
 
   def self.default_bindir
-    if defined? RUBY_FRAMEWORK_VERSION then # mac framework support
-      '/usr/bin'
-    else # generic install
-      RbConfig::CONFIG['bindir']
-    end
+    RbConfig::CONFIG["bindir"]
   end
 
-  ##
-  # A wrapper around RUBY_ENGINE const that may not be defined
-
   def self.ruby_engine
-    if defined? RUBY_ENGINE then
-      RUBY_ENGINE
-    else
-      'ruby'
-    end
+    RUBY_ENGINE
   end
 
   ##
   # The default signing key path
 
   def self.default_key_path
-    File.join Gem.user_home, ".gem", "gem-private_key.pem"
+    default_key_path = File.join Gem.user_home, ".gem", "gem-private_key.pem"
+
+    unless File.exist?(default_key_path)
+      default_key_path = File.join Gem.data_home, "gem", "gem-private_key.pem"
+    end
+
+    default_key_path
   end
 
   ##
   # The default signing certificate chain path
 
   def self.default_cert_path
-    File.join Gem.user_home, ".gem", "gem-public_cert.pem"
+    default_cert_path = File.join Gem.user_home, ".gem", "gem-public_cert.pem"
+
+    unless File.exist?(default_cert_path)
+      default_cert_path = File.join Gem.data_home, "gem", "gem-public_cert.pem"
+    end
+
+    default_cert_path
   end
 
   ##
-  # Whether to expect full paths in default gems - true for non-MRI
-  # ruby implementations
-  def self.default_gems_use_full_paths?
-    ruby_engine != 'ruby'
+  # Enables automatic installation into user directory
+
+  def self.default_user_install # :nodoc:
+    if !ENV.key?("GEM_HOME") && (File.exist?(Gem.dir) && !File.writable?(Gem.dir))
+      Gem.ui.say "Defaulting to user installation because default installation directory (#{Gem.dir}) is not writable."
+      return true
+    end
+
+    false
   end
 
   ##
@@ -164,14 +258,51 @@ module Gem
   # Directory where vendor gems are installed.
 
   def self.vendor_dir # :nodoc:
-    if vendor_dir = ENV['GEM_VENDOR'] then
+    if vendor_dir = ENV["GEM_VENDOR"]
       return vendor_dir.dup
     end
 
-    return nil unless RbConfig::CONFIG.key? 'vendordir'
+    return nil unless RbConfig::CONFIG.key? "vendordir"
 
-    File.join RbConfig::CONFIG['vendordir'], 'gems',
-              RbConfig::CONFIG['ruby_version']
+    File.join RbConfig::CONFIG["vendordir"], "gems",
+              RbConfig::CONFIG["ruby_version"]
   end
 
+  ##
+  # Default options for gem commands for Ruby packagers.
+  #
+  # The options here should be structured as an array of string "gem"
+  # command names as keys and a string of the default options as values.
+  #
+  # Example:
+  #
+  # def self.operating_system_defaults
+  #   {
+  #       'install' => '--no-rdoc --no-ri --env-shebang',
+  #       'update' => '--no-rdoc --no-ri --env-shebang'
+  #   }
+  # end
+
+  def self.operating_system_defaults
+    {}
+  end
+
+  ##
+  # Default options for gem commands for Ruby implementers.
+  #
+  # The options here should be structured as an array of string "gem"
+  # command names as keys and a string of the default options as values.
+  #
+  # Example:
+  #
+  # def self.platform_defaults
+  #   {
+  #       'install' => '--no-rdoc --no-ri --env-shebang',
+  #       'update' => '--no-rdoc --no-ri --env-shebang'
+  #   }
+  # end
+
+  def self.platform_defaults
+    {}
+  end
 end

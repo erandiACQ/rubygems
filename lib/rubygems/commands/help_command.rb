@@ -1,7 +1,8 @@
-require 'rubygems/command'
+# frozen_string_literal: true
+
+require_relative "../command"
 
 class Gem::Commands::HelpCommand < Gem::Command
-
   # :stopdoc:
   EXAMPLES = <<-EOF
 Some examples of 'gem' usage.
@@ -37,7 +38,7 @@ Some examples of 'gem' usage.
 
 * Create a gem:
 
-    See http://guides.rubygems.org/make-your-own-gem/
+    See https://guides.rubygems.org/make-your-own-gem/
 
 * See information about RubyGems:
 
@@ -268,7 +269,7 @@ Gem::Platform::CURRENT.  This will correctly mark the gem with your ruby's
 platform.
   EOF
 
-  # NOTE when updating also update Gem::Command::HELP
+  # NOTE: when updating also update Gem::Command::HELP
 
   SUBCOMMANDS = [
     ["commands",         :show_commands],
@@ -276,11 +277,11 @@ platform.
     ["examples",         EXAMPLES],
     ["gem_dependencies", GEM_DEPENDENCIES],
     ["platforms",        PLATFORMS],
-  ]
+  ].freeze
   # :startdoc:
 
   def initialize
-    super 'help', "Provide help on the 'gem' command"
+    super "help", "Provide help on the 'gem' command"
 
     @command_manager = Gem::CommandManager.instance
   end
@@ -296,8 +297,8 @@ platform.
       begins? command, arg
     end
 
-    if help then
-      if Symbol === help then
+    if help
+      if Symbol === help
         send help
       else
         say help
@@ -305,10 +306,10 @@ platform.
       return
     end
 
-    if options[:help] then
+    if options[:help]
       show_help
 
-    elsif arg then
+    elsif arg
       show_command_help arg
 
     else
@@ -323,24 +324,26 @@ platform.
 
     margin_width = 4
 
-    desc_width = @command_manager.command_names.map { |n| n.size }.max + 4
+    desc_width = @command_manager.command_names.map(&:size).max + 4
 
     summary_width = 80 - margin_width - desc_width
-    wrap_indent = ' ' * (margin_width + desc_width)
-    format = "#{' ' * margin_width}%-#{desc_width}s%s"
+    wrap_indent = " " * (margin_width + desc_width)
+    format = "#{" " * margin_width}%-#{desc_width}s%s"
 
     @command_manager.command_names.each do |cmd_name|
       command = @command_manager[cmd_name]
 
+      next if command&.deprecated?
+
       summary =
-        if command then
+        if command
           command.summary
         else
           "[No command found for #{cmd_name}]"
         end
 
       summary = wrap(summary, summary_width).split "\n"
-      out << sprintf(format, cmd_name, summary.shift)
+      out << format(format, cmd_name, summary.shift)
       until summary.empty? do
         out << "#{wrap_indent}#{summary.shift}"
       end
@@ -355,30 +358,18 @@ platform.
     say out.join("\n")
   end
 
-  def show_command_help command_name # :nodoc:
+  def show_command_help(command_name) # :nodoc:
     command_name = command_name.downcase
 
     possibilities = @command_manager.find_command_possibilities command_name
 
-    if possibilities.size == 1 then
+    if possibilities.size == 1
       command = @command_manager[possibilities.first]
       command.invoke("--help")
-    elsif possibilities.size > 1 then
-      alert_warning "Ambiguous command #{command_name} (#{possibilities.join(', ')})"
+    elsif possibilities.size > 1
+      alert_warning "Ambiguous command #{command_name} (#{possibilities.join(", ")})"
     else
-      alert_warning "Unknown command #{command_name}.  Try: gem help commands"
+      alert_warning "Unknown command #{command_name}. Try: gem help commands"
     end
   end
-
-  def show_help # :nodoc:
-    command = @command_manager[options[:help]]
-    if command then
-      # help with provided command
-      command.invoke("--help")
-    else
-      alert_error "Unknown command #{options[:help]}.  Try 'gem help commands'"
-    end
-  end
-
 end
-
